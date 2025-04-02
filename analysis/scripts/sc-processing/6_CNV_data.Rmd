@@ -1,0 +1,340 @@
+---
+title: "Add CNV data to sce"
+output:  html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(cowplot)
+library(openxlsx)
+library(ComplexHeatmap)
+
+# SC methods
+library(Seurat)
+library(scran)
+library(scater)
+library(infercnv)
+library(muscat)
+
+# Path to project folder
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+
+iteration = "5_MCL"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration)
+
+infercnv.dir <- file.path(wd, "scRNAseq/analysis/outputs/inferCNV_trees_kclusters")
+```
+
+```{r}
+samples.df <- read.xlsx(file.path(sce.dir, "cell_metadata.xlsx")) %>% 
+  mutate(
+    sample_norep = str_remove(sample, "_rep[0-9]"),
+    patient = factor(patient, levels = patients),
+    timepoint = factor(timepoint, levels = timepoints),
+    compartment = factor(compartment, levels = compartments)
+  )
+samples.df
+```
+
+```{r}
+sce.MCL <- readRDS(file = file.path(sce.dir, "sce.rds"))
+sce.MCL
+```
+
+# Add inferCNV clone data to the sce
+
+```{r fig.height=8, fig.width=5, message=FALSE, warning=FALSE}
+inferCNV.obs.groupings.list <- list()
+tSNE.CNVs.list <- list()
+
+for (current_patient in unique(sce.MCL$patient)) {
+  CNV.groupings.file <- file.path(
+    infercnv.dir,
+    current_patient,
+    "infercnv.observation_groupings.txt"
+  )
+  
+  inferCNV.obs.groupings.list[[current_patient]] <-
+    read.table(CNV.groupings.file) %>%
+    arrange(Dendrogram.Group, Annotation.Group) %>%
+    mutate(
+      Dendrogram.Group = str_remove(Dendrogram.Group, "all_observations\\."),
+      Patient = current_patient,
+      Patient.Dendrogram.Group = paste0(current_patient, ".", Dendrogram.Group)
+      )
+}
+
+inferCNV.obs.groupings <- inferCNV.obs.groupings.list %>%
+  bind_rows() %>%
+  mutate(
+    Patient = factor(Patient, levels = patients),
+    Patient.Dendrogram.Group = factor(Patient.Dendrogram.Group,
+                                      levels = unique(Patient.Dendrogram.Group))
+    )
+
+inferCNV.obs.groupings <- inferCNV.obs.groupings[colnames(sce.MCL), ]
+
+sce.MCL$CNV.group <- inferCNV.obs.groupings$Patient.Dendrogram.Group
+sce.MCL$CNV.group.color <- inferCNV.obs.groupings$Dendrogram.Color
+
+
+inferCNV.colors.df <- inferCNV.obs.groupings %>%
+  dplyr::select(Patient.Dendrogram.Group, Dendrogram.Color) %>%
+  remove_rownames() %>%
+  distinct() %>%
+  arrange(Patient.Dendrogram.Group)
+
+inferCNV.colors <- inferCNV.colors.df$Dendrogram.Color
+names(inferCNV.colors) <- inferCNV.colors.df$Patient.Dendrogram.Group
+```
+
+```{r fig.height=8, fig.width=5.5, message=FALSE, warning=FALSE}
+for (current_patient in unique(sce.MCL$patient)) {
+  tSNE.CNVs.list[[current_patient]] <- plotReducedDim(
+    sce.MCL[, sce.MCL$patient == current_patient],
+    dimred = "TSNE_corrected_SamplePhase",
+    color_by = "CNV.group",
+    point_size = 1,
+    point_alpha = 1,
+    other_fields = "timepoint"
+  ) +
+    facet_wrap( ~ timepoint, ncol = 1) +
+    theme_bw(base_size = 12) +
+    scale_color_manual(values = inferCNV.colors) +
+    xlim(-35, 40) + ylim(-40, 35) +
+    guides(color = guide_legend(override.aes = list(size = 4))) +
+    labs(color = "CNV group",
+         title = current_patient,
+         x = "TSNE 1", y = "TSNE 2"
+         )
+}
+tSNE.CNVs.list
+```
+
+```{r}
+for(patient in names(tSNE.CNVs.list)){
+  filename <- paste0("subclone_TSNE_", patient, ".png")
+  
+  png(filename = file.path(wd, "scRNAseq/figures", filename),
+    width = 5.5, height = 8, units = "in", bg = "white", res = 300)
+  print(tSNE.CNVs.list[[patient]])
+  dev.off()
+}
+```
+
+```{r fig.width=12, fig.height=7, message=FALSE}
+plot.P069.TSNE <- plotReducedDim(
+  sce.MCL[, sce.MCL$patient == "P069"],
+  dimred = "TSNE_corrected_SamplePhase",
+  color_by = "CNV.group",
+  point_size = 1,
+  point_alpha = 1,
+  other_fields = c("timepoint", "compartment")
+) +
+  theme_bw(base_size = 12) +
+  scale_color_manual(values = inferCNV.colors, labels = 1:3) +
+  facet_grid(timepoint ~ compartment) +
+  xlim(-35, 40) + ylim(-40, 35) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme(strip.text = element_text(face = "bold", size = 12)) +
+  labs(color = "CNV group",
+       x = "TSNE 1", y = "TSNE 2")
+plot.P069.TSNE
+```
+
+```{r fig.width=8, fig.height=8, message=FALSE}
+sce.MCL$tp_comp <- paste(sce.MCL$timepoint, sce.MCL$compartment)
+sce.MCL$tp_comp <- factor(sce.MCL$tp_comp,
+                          levels = c("DG PBMC", "REL PBMC", "REL BM", "REL GUT"))
+```
+
+
+```{r fig.width=7, fig.height=7.5, message=FALSE}
+plot.P069.TSNE <- plotReducedDim(
+  sce.MCL[, sce.MCL$patient == "P069"],
+  dimred = "TSNE_corrected_SamplePhase",
+  color_by = "CNV.group",
+  point_size = 1,
+  point_alpha = 1,
+  other_fields = c("tp_comp")
+) +
+  theme_bw(base_size = 16) +
+  scale_color_manual(values = inferCNV.colors, labels = 1:3) +
+  facet_wrap(~ tp_comp) +
+  xlim(-35, 40) + ylim(-40, 35) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme(
+    strip.text = element_text(face = "bold", size = 12),
+    legend.position = "bottom"
+    
+    ) +
+  labs(color = "(sub)clone",
+       x = "TSNE 1", y = "TSNE 2")
+
+plot.P069.TSNE
+```
+
+```{r}
+png(filename = file.path(wd, "scRNAseq/figures", "Fig4B.png"),
+    width = 7, height = 7.5, units = "in", bg = "white", res = 250)
+plot.P069.TSNE
+dev.off()
+```
+
+Add other inferCNV data fields to the sce via `infercnv::add_to_seurat` function:
+
+```{r warning=FALSE}
+sce.to.seu <- readRDS(file = file.path(
+  wd,
+  "scRNAseq/analysis/outputs",
+  "4_all_cells_labbeled",
+  "sce.rds"
+))
+
+coldata.cnv.list <- list()
+for(current_patient in patients){
+  sce.to.seu.subset <- sce.to.seu[, sce.to.seu$patient == current_patient]
+
+  rownames(sce.to.seu.subset) <- rowData(sce.to.seu.subset)[["ID"]]
+  seu <-
+    SeuratObject::as.Seurat(sce.to.seu.subset, counts = "counts", data = "logcounts")
+  
+  infercnv_output_path <- file.path(infercnv.dir, current_patient)
+  
+  seu.cnv <- infercnv::add_to_seurat(
+    seurat_obj = seu,
+    assay_name = "originalexp",
+    infercnv_output_path = infercnv_output_path,
+    top_n = 10
+  )
+  
+  sce.cnv <- as.SingleCellExperiment(seu.cnv)
+  coldata.cnv <- colData(sce.cnv) %>% 
+    as.data.frame()
+  coldata.cnv <- coldata.cnv[colnames(sce.MCL[, sce.MCL$patient == current_patient]), ]
+  
+  coldata.cnv.list[[current_patient]] <- coldata.cnv
+}
+coldata.cnv <- bind_rows(coldata.cnv.list) %>% 
+  select(contains("_chr"), contains("top_"))
+colData(sce.MCL) <- cbind(colData(sce.MCL), coldata.cnv)
+
+rm(sce.to.seu)
+rm(sce.to.seu.subset)
+rm(sce.cnv)
+rm(coldata.cnv)
+rm(coldata.cnv.list)
+gc(verbose = FALSE, full = TRUE)
+```
+
+```{r fig.height=6, fig.width=14.5, message=FALSE}
+sce.MCL$Status <- colData(sce.MCL) %>% 
+  as.data.frame() %>% 
+  select(has_loss_chr9, has_loss_chr17) %>% 
+  mutate(
+    Status = case_when(
+      !has_loss_chr9 & !has_loss_chr17 ~ "normal 9, 17",
+      has_loss_chr9 & !has_loss_chr17 ~ "del 9",
+      !has_loss_chr9 & has_loss_chr17 ~ "del 17",
+      has_loss_chr9 & has_loss_chr17 ~ "del 9, 17"
+    )
+  ) %>% pull(Status)
+
+plotReducedDim(sce.MCL,
+               dimred = "TSNE_corrected_SamplePhase",
+               color_by = "Status",
+               other_fields = c("timepoint", "patient")) +
+  facet_grid(timepoint ~ patient) +
+  theme_bw() +
+  labs(color = "Sample") +
+  xlim(-35, 40) + ylim(-40, 35) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  cowplot::theme_half_open(font_size = 16) + panel_border() +
+  theme(strip.text = element_text(face = "bold")) +
+  scale_color_manual(values = c("#66A0FF", "#8442FF", "#FF3AEE", "gray"))
+sce.MCL$Status <- NULL
+```
+
+```{r fig.height=5, fig.width=10, message=FALSE}
+plotReducedDim(sce.MCL,
+               dimred = "TSNE_corrected_SamplePhase",
+               color_by = "has_loss_chr17",
+               other_fields = "timepoint") +
+  facet_wrap( ~ timepoint) +
+  theme_bw() +
+  labs(color = "Sample") +
+  xlim(-35, 40) + ylim(-40, 35) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  cowplot::theme_half_open(font_size = 16) +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+# Assign clone names
+
+```{r}
+sce.MCL$CNV.clone <- colData(sce.MCL) %>% 
+  as.data.frame() %>% 
+  mutate(
+    CNV.clone = case_when(
+      timepoint == "REL" ~ "REL",
+      timepoint == "DG" & 
+        CNV.group %in% c("P009.1", "P009.2", "P009.5",
+                         "P022.2",
+                         "P027.1", "P027.3",
+                         "P087.3",
+                         "P069.2"
+                         ) ~ "DGs",
+      timepoint == "DG" & 
+        CNV.group %in% c("P009.3", "P009.4",
+                         "P022.1",
+                         "P027.2",
+                         "P087.1", "P087.2", "P087.4",
+                         "P069.1"
+                         ) ~ "DGex"
+    ),
+    CNV.clone = factor(CNV.clone, levels = c("DGex", "DGs", "REL"))
+  ) %>% 
+  pull(CNV.clone)
+```
+
+```{r fig.height=5, fig.width=12, message=FALSE}
+DGs.plot <- plotReducedDim(
+  sce.MCL,
+  dimred = "TSNE_corrected_SamplePhase",
+  color_by = "CNV.clone",
+  other_fields = c("patient", "timepoint")
+) +
+  facet_grid(timepoint ~ patient) +
+  xlim(-35, 40) + ylim(-40, 35) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  cowplot::theme_half_open(font_size = 16) + panel_border(color = "grey50") +
+  theme(strip.text = element_text(face = "bold")) +
+  scale_color_manual(values = c("gray50", "red", "orange")) +
+  labs(color = "CNV clone", x = "TSNE 1", y = "TSNE 2")
+DGs.plot
+```
+
+```{r}
+png(filename = file.path(wd, "scRNAseq/figures", "Fig3A.png"),
+    width = 12, height = 5, units = "in", bg = "white", res = 300)
+DGs.plot
+dev.off()
+```
+
+# Save
+
+```{r}
+iteration_output = "6_MCL_CNV"
+storage.dir <-
+  file.path(wd, "scRNAseq/analysis/outputs", iteration_output)
+dir.create(storage.dir, showWarnings = F, recursive = T)
+
+saveRDS(sce.MCL,
+        file = file.path(storage.dir, "sce.rds"))
+write.xlsx(samples.df,
+           file.path(storage.dir, "cell_metadata.xlsx"))
+```
+
+

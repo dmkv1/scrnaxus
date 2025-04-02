@@ -1,0 +1,23 @@
+alignment/samples
+analysis/outputs/*
+analysis/results/*
+docker compose/rstudio-server-scrnaseq/STAR
+
+*.log
+*.txt
+
+*.nb.html
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.rds
+*.RData
+
+*.dat
+*.infercnv_obj
+*.cell_groupings
+*.mcmc_obj
+
+*.png
+*.pdf

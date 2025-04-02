@@ -1,0 +1,65 @@
+---
+title: "R Notebook"
+---
+
+```{r fig.height=8, fig.width=5, message=FALSE}
+for (current_patient in unique(sce.MCL$patient)) {
+  tSNE.CNVs.list[[current_patient]] <- plotReducedDim(
+    sce.MCL[, sce.MCL$patient == current_patient],
+    dimred = "TSNE_corrected_SamplePhase",
+    color_by = "CNV.group",
+    point_size = 1,
+    point_alpha = 1,
+    other_fields = "timepoint"
+  ) +
+    facet_wrap( ~ timepoint, ncol = 1) +
+    xlim(-35, 40) + ylim(-40, 35) +
+    guides(color = guide_legend(override.aes = list(size = 4))) +
+    cowplot::theme_half_open(font_size = 16) +
+    theme(strip.text = element_text(face = "bold")) +
+    labs(color = "CNV group", title = current_patient) +
+    scale_color_manual(values = inferCNV.colors)
+}
+tSNE.CNVs.list
+```
+
+```{r fig.height=8, fig.width=6.5, message=FALSE, warning=FALSE}
+tSNE.CNVs.list[["P069"]] <- plotReducedDim(
+  sce.MCL[, sce.MCL$patient == "P069"],
+  dimred = "TSNE_corrected_SamplePhase",
+  color_by = "CNV.group",
+  point_size = 1,
+  point_alpha = 1,
+  other_fields = c("timepoint", "compartment")
+) +
+  facet_grid(compartment ~ timepoint) +
+  theme_bw() +
+  theme(
+    strip.text.y = element_text(face = "bold", angle = 0),
+    strip.text.x = element_text(face = "bold")
+    ) +
+  scale_color_manual(values = inferCNV.colors) +
+  xlim(-41, 40) + ylim(-30, 35) +
+  labs(color = "CNV group")
+tSNE.CNVs.list[["P069"]]
+```
+
+```{r fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+UMAP.CNVs.list <- list()
+for (current_patient in unique(sce.MCL$patient)) {
+  UMAP.CNVs.list[[current_patient]] <- plotReducedDim(
+    sce.MCL[, sce.MCL$patient == current_patient],
+    dimred = "UMAP_corrected_SamplePhase",
+    color_by = "CNV.group",
+    point_size = 1,
+    point_alpha = 1,
+    other_fields = "timepoint"
+  ) +
+    facet_wrap( ~ timepoint) +
+    theme_bw() +
+    scale_color_manual(values = inferCNV.colors) +
+    labs(color = "CNV group", title = current_patient) +
+    xlim(-8, 13) + ylim(-14, 9)
+}
+UMAP.CNVs.list
+```

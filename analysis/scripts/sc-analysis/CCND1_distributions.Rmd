@@ -1,0 +1,144 @@
+---
+title: "CCND1 expressions in MCL cells"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(openxlsx)
+library(ggridges)
+
+random_seed_value = 17
+
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+
+iteration_input = "4_all_cells_labbeled"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration_input)
+
+figures.out.dir <- file.path(wd, "scRNAseq/figures")
+tables.out.dir <- file.path(wd, "scRNAseq/analysis/results/DE_analysis_DK")
+```
+
+```{r}
+sce <- readRDS(file.path(sce.dir, "sce.rds"))
+sce$cell_type_manual_2 <- colData(sce) %>%
+  as.data.frame() %>%
+  mutate(
+    cell_type_manual = case_when(
+      cell_type_manual == "MCL" ~ "MCL cells",
+      cell_type_manual == "B cell" ~ "B cells",
+      TRUE ~ "Other normal cells"
+    ),
+    cell_type_manual = factor(
+      cell_type_manual,
+      levels = c(
+        "MCL cells",
+        "B cells",
+        "Other normal cells"
+      )
+    )
+  ) %>% pull(cell_type_manual)
+```
+
+```{r}
+cell_colors <- c(
+      "B cells" = "#006BA4",
+      "MCL cells" = "#D82526",
+      "Other normal cells" = "#C87000"
+    )
+```
+
+```{r, fig.width=7, fig.height=6}
+plotTSNE(sce, color_by = "cell_type_manual_2") +
+  scale_color_manual(
+    values = cell_colors
+  )
+```
+
+
+```{r fig.height=6, fig.width=7, message=FALSE}
+sce[, sce$patient == "P009"] %>% 
+  plotTSNE(., color_by = "cell_type_manual_2",
+           other_fields = "cell_type_manual_2") +
+  scale_color_manual(
+    values = cell_colors
+  ) +
+  theme_bw()
+```
+
+```{r, fig.width=7, fig.height=6}
+sce[, sce$patient == "P009"] %>% 
+  plotTSNE(., color_by = "CCND1") +
+  theme_bw()
+```
+
+```{r, fig.width=7, fig.height=6}
+sce[, sce$patient == "P022"] %>% 
+  plotTSNE(., color_by = "cell_type_manual_2",
+           other_fields = "cell_type_manual_2") +
+  scale_color_manual(
+    values = cell_colors
+  ) +
+  theme_bw()
+```
+
+```{r, fig.width=8, fig.height=3}
+sce[, sce$patient == "P022"] %>% 
+  plotTSNE(., color_by = "cell_type_manual_2",
+           other_fields = "cell_type_manual_2") +
+  scale_color_manual(
+    values = cell_colors
+  ) +
+  facet_wrap(~ cell_type_manual_2) +
+  theme_bw()
+```
+
+```{r}
+sce[, sce$patient == "P022"] %>% 
+  .[, .$cell_type_manual_2 == "B cells"] %>% 
+  colData() %>% as.data.frame()
+```
+
+```{r}
+sce$cell_type_manual_2 %>% unique()
+```
+
+
+```{r fig.height=3.5, fig.width=8}
+cell.types <- c("MCL cells", "B cells", "Other normal cells")
+
+data.frame(
+  Patient = sce$patient,
+  Cell_type = sce$cell_type_manual_2,
+  "logcounts.CCND1" = logcounts(sce)["CCND1", ]
+) %>%
+  filter(Cell_type %in% cell.types) %>%
+  filter(!(Patient == "P022" & Cell_type == "B cells")) %>%
+  mutate(Cell_type = factor(Cell_type, levels = cell.types)) %>%
+  ggplot() +
+  geom_density_ridges(
+    aes(x = logcounts.CCND1, y = Cell_type, fill = Cell_type),
+    panel_scaling = T,
+    alpha = 0.5,
+    #jittered_points = TRUE,
+    #position = position_points_jitter(width = 0.05, height = 0),
+    #point_shape = '|', point_size = 1, point_alpha = 0.5
+    ) +
+  scale_fill_manual(values = cell_colors) +
+  facet_wrap( ~ Patient, ncol = 5) +
+  theme_ridges() +
+  labs(y = NULL, x = "log(counts) CCND1") +
+  theme(legend.position = "none")
+```
+
+
+
+
+
+
+
+
+
+

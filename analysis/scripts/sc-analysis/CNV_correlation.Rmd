@@ -1,0 +1,702 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(openxlsx)
+
+library(scran)
+library(scater)
+
+library(ReactomePA)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+library(infercnv)
+library(GenomicRanges)
+
+library(karyoploteR)
+library(plyranges)
+
+# Parallelization
+library(BiocParallel)
+bpp <- MulticoreParam(workers = 48)
+
+random_seed_value = 17
+
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+
+library(BSgenome.Hsapiens.UCSC.hg38)
+seqinfo_hg38 <- Seqinfo(genome = "hg38",
+                        seqlengths = seqlengths(BSgenome.Hsapiens.UCSC.hg38))
+
+iteration_input = "6_MCL_CNV"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration_input)
+
+figures.out.dir <- file.path(wd, "scRNAseq/figures")
+tables.out.dir <- file.path(wd, "scRNAseq/analysis/results/DE_analysis_DK")
+
+infercnv.dir <- file.path(wd, "scRNAseq/analysis/outputs/inferCNV_trees_kclusters")
+inferCNV.ranges <- "infercnv.20_HMM_predHMMi6.rand_trees.hmm_mode-subclusters.Pnorm_0.5.repr_intensities.observation_groupings.txt"
+
+patients <- c("P009", "P022", "P027", "P087", "P069")
+
+cn_colors <- c(
+  "-2" = "blue",
+  "-1" = "lightblue",
+  "1" = "pink",
+  "2" = "red"
+)
+```
+
+## SCE
+
+```{r}
+sce <- readRDS(file = file.path(sce.dir, "sce.rds"))
+sce
+```
+
+```{r}
+cell.groups <- colData(sce) %>% 
+  as.data.frame() %>% 
+  dplyr::select(
+    CNV.group, CNV.clone
+  ) %>% 
+  rownames_to_column("barcode_sample")
+head(cell.groups)
+```
+
+# Correlations for DGex with DG-WES
+
+## CNs from inferCNV
+
+```{r warning=FALSE}
+inferCNV.gr.list <- list()
+for (current_patient in patients) {
+  barcodes_groups <- file.path(infercnv.dir, current_patient, inferCNV.ranges) %>%
+    read.table(.) %>%
+    dplyr::select(Dendrogram.Group, Annotation.Group) %>%
+    rownames_to_column("barcode_sample")
+  
+  obs.clones <- left_join(barcodes_groups, cell.groups, by = join_by(barcode_sample)) %>%
+    dplyr::select(-barcode_sample, -Annotation.Group) %>%
+    distinct() %>%
+    arrange(Dendrogram.Group)
+  
+  segments <- file.path(infercnv.dir,
+                        "infer_CNV_regions",
+                        paste0(current_patient, ".dat")) %>%
+    read.table(., header = T) %>%
+    mutate(cell_group_name = str_remove(cell_group_name, "all_observations.")) %>%
+    left_join(., obs.clones, by = join_by("cell_group_name" == "Dendrogram.Group")) %>%
+    mutate(
+      cn = case_when(
+        state == 1 ~ 0,
+        state == 2 ~ 1,
+        state == 3 ~ 2,
+        state == 4 ~ 3,
+        state == 5 ~ 4,
+        state == 6 ~ 5,
+      ),
+      cn = cn - 2
+    )
+  
+  toGranges <- segments %>%
+    filter(CNV.clone == "DGex")
+  
+  gr <- GRanges(
+    seqnames = toGranges$chr,
+    ranges = IRanges(start = toGranges$start, end = toGranges$end),
+    cn = toGranges$cn,
+    seqinfo = seqinfo_hg38
+  ) %>%
+    reduce_ranges_directed(cn = min(cn))
+  gr$color <- cn_colors[as.character(gr$cn)]
+  
+  inferCNV.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r, fig.width=10, fig.height=7}
+for(current_patient in patients) {
+  kp <- plotKaryotype(genome = "hg38")  # Specify genome
+  kpPlotRegions(kp, data = inferCNV.gr.list[[current_patient]],
+                col = inferCNV.gr.list[[current_patient]]$color,
+                border = "black")
+  title(current_patient, adj = 0, line = 3)
+}
+```
+
+## CNs from CNVkit
+
+```{r}
+CNVkit.gr.list <- list()
+for (current_patient in patients) {
+  if (current_patient == "P069") {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_DG_PBMC"),
+      paste0(current_patient, "_PT_DG_PBMC.call.cns")
+    )
+  } else {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_DG"),
+      paste0(current_patient, "_PT_DG.call.cns")
+    )
+  }
+  segments.CNVkit <- file_path %>%
+    read.table(header = T) %>%
+    filter(!(chromosome %in% c("chrX", "chrY"))) %>%
+    filter(cn != 2) %>%
+    mutate(cn = cn - 2)
+  gr <- GRanges(
+    seqnames = segments.CNVkit$chromosome,
+    ranges = IRanges(start = segments.CNVkit$start, end = segments.CNVkit$end),
+    cn = segments.CNVkit$cn,
+    seqinfo = seqinfo_hg38
+  )
+  gr$color <- cn_colors[as.character(gr$cn)]
+  CNVkit.gr.list[[current_patient]] <- gr
+}
+```
+
+```{r, fig.width=10, fig.height=7}
+for(current_patient in patients) {
+  kp <- plotKaryotype(genome = "hg38")  # Specify genome
+  kpPlotRegions(kp, data = CNVkit.gr.list[[current_patient]],
+                col = CNVkit.gr.list[[current_patient]]$color,
+                border = "black")
+  title(current_patient, adj = 0, line = 3)
+}
+```
+
+```{r}
+bin_size <- 100000
+bins <- tileGenome(
+  seqinfo_hg38,
+  tilewidth = bin_size,
+  cut.last.tile.in.chrom = TRUE
+)
+
+corr.list <- list()
+for(current_patient in patients) {
+  inferCNV.GR.binned <- bins %>%
+    join_overlap_inner(inferCNV.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  CNVkit.GR.binned <- bins %>%
+    join_overlap_inner(CNVkit.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  comparison <- inner_join(
+    as.data.frame(inferCNV.GR.binned),
+    as.data.frame(CNVkit.GR.binned),
+    by = c("seqnames", "start", "end"),
+    suffix = c("_inferCNV", "_CNVkit")
+  )
+  
+  corr.list[[current_patient]] <- cor.test(
+    comparison$cn_inferCNV, comparison$cn_CNVkit,
+    method = "spearman"
+    )
+}
+corr.list
+```
+
+# Correlations for DGs with REL-WES
+
+## CNs from inferCNV
+
+```{r warning=FALSE}
+inferCNV.gr.list <- list()
+for (current_patient in patients) {
+  barcodes_groups <- file.path(infercnv.dir, current_patient, inferCNV.ranges) %>%
+    read.table(.) %>%
+    dplyr::select(Dendrogram.Group, Annotation.Group) %>%
+    rownames_to_column("barcode_sample")
+  
+  obs.clones <- left_join(barcodes_groups, cell.groups, by = join_by(barcode_sample)) %>%
+    dplyr::select(-barcode_sample, -Annotation.Group) %>%
+    distinct() %>%
+    arrange(Dendrogram.Group)
+  
+  segments <- file.path(infercnv.dir,
+                        "infer_CNV_regions",
+                        paste0(current_patient, ".dat")) %>%
+    read.table(., header = T) %>%
+    mutate(cell_group_name = str_remove(cell_group_name, "all_observations.")) %>%
+    left_join(., obs.clones, by = join_by("cell_group_name" == "Dendrogram.Group")) %>%
+    mutate(
+      cn = case_when(
+        state == 1 ~ 0,
+        state == 2 ~ 1,
+        state == 3 ~ 2,
+        state == 4 ~ 3,
+        state == 5 ~ 4,
+        state == 6 ~ 5,
+      ),
+      cn = cn - 2
+    )
+  
+  toGranges <- segments %>%
+    filter(CNV.clone == "DGs")
+  
+  gr <- GRanges(
+    seqnames = toGranges$chr,
+    ranges = IRanges(start = toGranges$start, end = toGranges$end),
+    cn = toGranges$cn,
+    seqinfo = seqinfo_hg38
+  ) %>%
+    reduce_ranges_directed(cn = min(cn))
+  gr$color <- cn_colors[as.character(gr$cn)]
+  
+  inferCNV.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r, fig.width=10, fig.height=7}
+for(current_patient in patients) {
+  kp <- plotKaryotype(genome = "hg38")  # Specify genome
+  kpPlotRegions(kp, data = inferCNV.gr.list[[current_patient]],
+                col = inferCNV.gr.list[[current_patient]]$color,
+                border = "black")
+}
+```
+
+## CNs from CNVkit
+
+```{r}
+CNVkit.gr.list <- list()
+for(current_patient in patients) {
+  if (current_patient == "P069") {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_REL_BM"),
+      paste0(current_patient, "_PT_REL_BM.call.cns")
+    )
+  } else {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_REL"),
+      paste0(current_patient, "_PT_REL.call.cns")
+    )
+  }
+  
+  segments.CNVkit <- file_path %>%
+    read.table(header = T) %>%
+    filter(!(chromosome %in% c("chrX", "chrY"))) %>%
+    filter(cn != 2) %>%
+    mutate(cn = cn - 2)
+  gr <- GRanges(
+    seqnames = segments.CNVkit$chromosome,
+    ranges = IRanges(start = segments.CNVkit$start, end = segments.CNVkit$end),
+    cn = segments.CNVkit$cn,
+    seqinfo = seqinfo_hg38
+  )
+  gr$color <- cn_colors[as.character(gr$cn)]
+  CNVkit.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r, fig.width=10, fig.height=7}
+for(current_patient in patients) {
+  kp <- plotKaryotype(genome = "hg38")  # Specify genome
+  kpPlotRegions(kp, data = CNVkit.gr.list[[current_patient]],
+                col = CNVkit.gr.list[[current_patient]]$color,
+                border = "black")
+}
+```
+
+```{r}
+bin_size <- 100000
+bins <- tileGenome(
+  seqinfo_hg38,
+  tilewidth = bin_size,
+  cut.last.tile.in.chrom = TRUE
+)
+
+corr.list <- list()
+for(current_patient in patients) {
+  inferCNV.GR.binned <- bins %>%
+    join_overlap_inner(inferCNV.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  CNVkit.GR.binned <- bins %>%
+    join_overlap_inner(CNVkit.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  comparison <- inner_join(
+    as.data.frame(inferCNV.GR.binned),
+    as.data.frame(CNVkit.GR.binned),
+    by = c("seqnames", "start", "end"),
+    suffix = c("_inferCNV", "_CNVkit")
+  )
+  
+  corr.list[[current_patient]] <- cor.test(
+    comparison$cn_inferCNV, comparison$cn_CNVkit,
+    method = "spearman"
+    )
+}
+corr.list
+```
+
+# Correlations for REL with REL-WES
+
+## CNs from inferCNV
+
+```{r warning=FALSE}
+inferCNV.gr.list <- list()
+for (current_patient in patients[1:4]) {
+  barcodes_groups <- file.path(infercnv.dir, current_patient, inferCNV.ranges) %>%
+    read.table(.) %>%
+    dplyr::select(Dendrogram.Group, Annotation.Group) %>%
+    rownames_to_column("barcode_sample")
+  
+  obs.clones <- left_join(barcodes_groups, cell.groups, by = join_by(barcode_sample)) %>%
+    dplyr::select(-barcode_sample, -Annotation.Group) %>%
+    distinct() %>%
+    arrange(Dendrogram.Group)
+  
+  segments <- file.path(infercnv.dir,
+                        "infer_CNV_regions",
+                        paste0(current_patient, ".dat")) %>%
+    read.table(., header = T) %>%
+    mutate(cell_group_name = str_remove(cell_group_name, "all_observations.")) %>%
+    left_join(., obs.clones, by = join_by("cell_group_name" == "Dendrogram.Group")) %>%
+    mutate(
+      cn = case_when(
+        state == 1 ~ 0,
+        state == 2 ~ 1,
+        state == 3 ~ 2,
+        state == 4 ~ 3,
+        state == 5 ~ 4,
+        state == 6 ~ 5,
+      ),
+      cn = cn - 2
+    )
+  
+  toGranges <- segments %>%
+    filter(CNV.clone == "REL")
+  
+  gr <- GRanges(
+    seqnames = toGranges$chr,
+    ranges = IRanges(start = toGranges$start, end = toGranges$end),
+    cn = toGranges$cn,
+    seqinfo = seqinfo_hg38
+  ) %>%
+    reduce_ranges_directed(cn = min(cn))
+  gr$color <- cn_colors[as.character(gr$cn)]
+  
+  inferCNV.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r, fig.width=10, fig.height=7}
+for(current_patient in patients[1:4]) {
+  kp <- plotKaryotype(genome = "hg38")  # Specify genome
+  kpPlotRegions(kp, data = inferCNV.gr.list[[current_patient]],
+                col = inferCNV.gr.list[[current_patient]]$color,
+                border = "black")
+}
+```
+
+## CNs from CNVkit
+
+```{r}
+CNVkit.gr.list <- list()
+for(current_patient in patients[1:4]) {
+  if (current_patient == "P069") {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_REL_GUT"),
+      paste0(current_patient, "_PT_REL_GUT.call.cns")
+    )
+  } else {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_REL"),
+      paste0(current_patient, "_PT_REL.call.cns")
+    )
+  }
+  
+  segments.CNVkit <- file_path %>%
+    read.table(header = T) %>%
+    filter(!(chromosome %in% c("chrX", "chrY"))) %>%
+    filter(cn != 2) %>%
+    mutate(cn = cn - 2)
+  gr <- GRanges(
+    seqnames = segments.CNVkit$chromosome,
+    ranges = IRanges(start = segments.CNVkit$start, end = segments.CNVkit$end),
+    cn = segments.CNVkit$cn,
+    seqinfo = seqinfo_hg38
+  )
+  gr$color <- cn_colors[as.character(gr$cn)]
+  CNVkit.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r, fig.width=10, fig.height=7}
+for(current_patient in patients[1:4]) {
+  kp <- plotKaryotype(genome = "hg38")  # Specify genome
+  kpPlotRegions(kp, data = CNVkit.gr.list[[current_patient]],
+                col = CNVkit.gr.list[[current_patient]]$color,
+                border = "black")
+}
+```
+
+```{r}
+bin_size <- 100000
+bins <- tileGenome(
+  seqinfo_hg38,
+  tilewidth = bin_size,
+  cut.last.tile.in.chrom = TRUE
+)
+
+corr.list <- list()
+for(current_patient in patients[1:4]) {
+  inferCNV.GR.binned <- bins %>%
+    join_overlap_inner(inferCNV.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  CNVkit.GR.binned <- bins %>%
+    join_overlap_inner(CNVkit.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  comparison <- inner_join(
+    as.data.frame(inferCNV.GR.binned),
+    as.data.frame(CNVkit.GR.binned),
+    by = c("seqnames", "start", "end"),
+    suffix = c("_inferCNV", "_CNVkit")
+  )
+  
+  corr.list[[current_patient]] <- cor.test(
+    comparison$cn_inferCNV, comparison$cn_CNVkit,
+    method = "spearman"
+    )
+}
+corr.list
+```
+
+### P069 GUT REL WES vs inferCNV
+
+```{r}
+current_patient = "P069"
+
+barcodes_groups <- file.path(infercnv.dir, current_patient, inferCNV.ranges) %>%
+  read.table(.) %>%
+  dplyr::select(Dendrogram.Group, Annotation.Group) %>%
+  rownames_to_column("barcode_sample")
+
+obs.clones <- left_join(barcodes_groups, cell.groups, by = join_by(barcode_sample)) %>%
+  dplyr::select(-barcode_sample, -Annotation.Group) %>%
+  distinct() %>%
+  arrange(Dendrogram.Group)
+
+segments <- file.path(infercnv.dir,
+                      "infer_CNV_regions",
+                      paste0(current_patient, ".dat")) %>%
+  read.table(., header = T) %>%
+  mutate(cell_group_name = str_remove(cell_group_name, "all_observations.")) %>%
+  left_join(., obs.clones, by = join_by("cell_group_name" == "Dendrogram.Group")) %>%
+  mutate(
+    cn = case_when(
+      state == 1 ~ 0,
+      state == 2 ~ 1,
+      state == 3 ~ 2,
+      state == 4 ~ 3,
+      state == 5 ~ 4,
+      state == 6 ~ 5,
+    ),
+    cn = cn - 2
+  )
+
+toGranges <- segments %>%
+  filter(CNV.group == "P069.3")
+
+gr <- GRanges(
+  seqnames = toGranges$chr,
+  ranges = IRanges(start = toGranges$start, end = toGranges$end),
+  cn = toGranges$cn,
+  seqinfo = seqinfo_hg38
+) %>%
+  reduce_ranges_directed(cn = min(cn))
+gr$color <- cn_colors[as.character(gr$cn)]
+
+inferCNV.gr.list[[current_patient]] <- gr 
+```
+
+```{r}
+segments.CNVkit <- file.path(
+  wd,
+  "WES/CNV/CNV",
+  paste0(current_patient, "_PT_REL_GUT"),
+  paste0(current_patient, "_PT_REL_GUT.call.cns")
+) %>% read.table(header = T) %>%
+  filter(!(chromosome %in% c("chrX", "chrY"))) %>%
+  filter(cn != 2) %>%
+  mutate(cn = cn - 2)
+gr <- GRanges(
+  seqnames = segments.CNVkit$chromosome,
+  ranges = IRanges(start = segments.CNVkit$start, end = segments.CNVkit$end),
+  cn = segments.CNVkit$cn,
+  seqinfo = seqinfo_hg38
+)
+gr$color <- cn_colors[as.character(gr$cn)]
+CNVkit.gr.list[[current_patient]] <- gr
+```
+
+
+```{r}
+bin_size <- 100000
+bins <- tileGenome(seqinfo_hg38,
+                   tilewidth = bin_size,
+                   cut.last.tile.in.chrom = TRUE)
+
+inferCNV.GR.binned <- bins %>%
+  join_overlap_inner(inferCNV.gr.list[[current_patient]]) %>%
+  group_by(seqnames, start, end) %>%
+  summarize(cn = mean(cn))
+
+CNVkit.GR.binned <- bins %>%
+  join_overlap_inner(CNVkit.gr.list[[current_patient]]) %>%
+  group_by(seqnames, start, end) %>%
+  summarize(cn = mean(cn))
+
+comparison <- inner_join(
+  as.data.frame(inferCNV.GR.binned),
+  as.data.frame(CNVkit.GR.binned),
+  by = c("seqnames", "start", "end"),
+  suffix = c("_inferCNV", "_CNVkit")
+)
+
+cor.test(comparison$cn_inferCNV, comparison$cn_CNVkit, method = "spearman")
+```
+
+# DG with REL correlation of CNVkit data
+
+```{r}
+DG.gr.list <- list()
+for(current_patient in patients) {
+  if (current_patient == "P069") {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_DG_PBMC"),
+      paste0(current_patient, "_PT_DG_PBMC.call.cns")
+    )
+  } else {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_DG"),
+      paste0(current_patient, "_PT_DG.call.cns")
+    )
+  }
+  
+  segments.CNVkit <- file_path %>%
+    read.table(header = T) %>%
+    filter(!(chromosome %in% c("chrX", "chrY"))) %>%
+    filter(cn != 2) %>%
+    mutate(cn = cn - 2)
+  gr <- GRanges(
+    seqnames = segments.CNVkit$chromosome,
+    ranges = IRanges(start = segments.CNVkit$start, end = segments.CNVkit$end),
+    cn = segments.CNVkit$cn,
+    seqinfo = seqinfo_hg38
+  )
+  gr$color <- cn_colors[as.character(gr$cn)]
+  DG.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r}
+REL.gr.list <- list()
+for(current_patient in patients) {
+  if (current_patient == "P069") {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_REL_GUT"),
+      paste0(current_patient, "_PT_REL_GUT.call.cns")
+    )
+  } else {
+    file_path <- file.path(
+      wd,
+      "WES/CNV/CNV",
+      paste0(current_patient, "_PT_REL"),
+      paste0(current_patient, "_PT_REL.call.cns")
+    )
+  }
+  
+  segments.CNVkit <- file_path %>%
+    read.table(header = T) %>%
+    filter(!(chromosome %in% c("chrX", "chrY"))) %>%
+    filter(cn != 2) %>%
+    mutate(cn = cn - 2)
+  gr <- GRanges(
+    seqnames = segments.CNVkit$chromosome,
+    ranges = IRanges(start = segments.CNVkit$start, end = segments.CNVkit$end),
+    cn = segments.CNVkit$cn,
+    seqinfo = seqinfo_hg38
+  )
+  gr$color <- cn_colors[as.character(gr$cn)]
+  REL.gr.list[[current_patient]] <- gr 
+}
+```
+
+```{r}
+bin_size <- 100000
+bins <- tileGenome(
+  seqinfo_hg38,
+  tilewidth = bin_size,
+  cut.last.tile.in.chrom = TRUE
+)
+
+corr.list <- list()
+for(current_patient in patients) {
+  GR1.binned <- bins %>%
+    join_overlap_inner(DG.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  GR2.binned <- bins %>%
+    join_overlap_inner(REL.gr.list[[current_patient]]) %>%
+    group_by(seqnames, start, end) %>%
+    summarize(cn = mean(cn))
+  
+  comparison <- inner_join(
+    as.data.frame(GR1.binned),
+    as.data.frame(GR2.binned),
+    by = c("seqnames", "start", "end"),
+    suffix = c("_DG", "_REL")
+  )
+  
+  corr.list[[current_patient]] <- cor.test(
+    comparison$cn_DG, comparison$cn_REL,
+    method = "spearman"
+    )
+}
+corr.list
+```
+
+```{r}
+sessionInfo()
+```
+
