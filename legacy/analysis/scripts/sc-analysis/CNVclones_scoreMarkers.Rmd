@@ -1,0 +1,305 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(openxlsx)
+
+library(scran)
+library(scater)
+
+library(ReactomePA)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+# Parallelization
+library(BiocParallel)
+bpp <- MulticoreParam(workers = 16)
+
+random_seed_value = 17
+
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+
+iteration_input = "6_MCL_CNV"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration_input)
+
+figures.out.dir <- file.path(wd, "scRNAseq/figures")
+tables.out.dir <- file.path(wd, "scRNAseq/analysis/results/DE_analysis_DK")
+```
+
+```{r}
+sce <- readRDS(file.path(sce.dir, "sce.rds"))
+colnames_to_store <- colData(sce) %>%
+  as.data.frame() %>%
+  dplyr::select(
+    -contains("subsets_"),
+    -contains("top_"),
+    -contains("has_"),
+    -contains("proportion_")
+  ) %>%
+  colnames()
+colData(sce) <- colData(sce)[colnames_to_store]
+sce
+```
+
+```{r, fig.width=7, fig.height=2.5}
+plotReducedDim(sce, dimred = "TSNE_corrected_SamplePhase",
+               color_by = "CNV.clone",
+               other_fields = c("CNV.clone")
+               ) +
+  facet_grid(~ CNV.clone) +
+  theme_bw()
+```
+
+
+```{r, fig.width=10, fig.height=6}
+plotReducedDim(sce, dimred = "TSNE_corrected_SamplePhase",
+               color_by = "CNV.clone",
+               other_fields = c("patient", "CNV.clone")
+               ) +
+  facet_grid(CNV.clone ~ patient) +
+  theme_bw()
+```
+
+```{r}
+sce.DG <- sce[, sce$timepoint == "DG"]
+sce.DG$CNV.clone <- factor(sce.DG$CNV.clone, levels = c("DGex", "DGs"))
+unique(sce.DG$CNV.clone)
+```
+
+## `scoreMarkers` for each patient separately
+
+```{r}
+DGs.markers.list <- list()
+for(patient in c("P009", "P022", "P027", "P087", "P069")){
+  sce.patient <- sce.DG[, sce.DG$patient == patient]
+  markers <- scoreMarkers(sce.patient,
+                          groups = sce.patient$CNV.clone,
+                          pairings = c("DGs", "DGex"),
+                          lfc = 0.5,
+                          BPPARAM = bpp
+                          )
+  rm(sce.patient)
+  DGs.markers.list[[patient]] <- markers[["DGs"]] %>% 
+    as.data.frame() %>% 
+    rownames_to_column("genename") %>% 
+    arrange(desc(mean.AUC))
+}
+lapply(DGs.markers.list, filter, mean.AUC > 0.5)
+```
+
+```{r}
+DGs.markers.sig.list <- lapply(DGs.markers.list, filter, mean.AUC > 0.5)
+DGs.markers.sig.list <- DGs.markers.sig.list[lapply(DGs.markers.sig.list, nrow) > 0]
+```
+
+```{r}
+write.xlsx(DGs.markers.list,
+           file = file.path(tables.out.dir, "CNVclones_scoreMarkers_all.xlsx"))
+
+write.xlsx(DGs.markers.sig.list,
+           file = file.path(tables.out.dir, "CNVclones_scoreMarkers_sig.xlsx"))
+```
+
+```{r, fig.width=4, fig.height=8}
+ht.list <- list()
+
+for (patient in names(DGs.markers.sig.list)) {
+  genes.to.plot <- DGs.markers.sig.list[[patient]] %>%
+    pull(genename)
+  
+  ht.list[[patient]] <- plotGroupedHeatmap(
+    sce,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = patient,
+    fontsize_row = 8,
+    cluster_rows = T,
+    cluster_cols = F,
+    angle_col = c("0"),
+    silent = T,
+    zlim = c(-0.5, 0.5)
+  ) %>%
+    ggplotify::as.ggplot()
+}
+ht.list[c("P022", "P087")]
+```
+
+```{r, fig.width=4, fig.height=3}
+ht.list[c("P009")]
+```
+
+```{r}
+patient = "P009"
+file.name <- paste0("CNVclone_exprHT_", patient, ".tiff")
+tiff(
+  filename = file.path(figures.out.dir, file.name),
+  units = "in",
+  width = 4,
+  height = 3,
+  res = 300,
+  bg = "white"
+)
+print(ht.list[[patient]])
+dev.off()
+```
+
+```{r}
+for(patient in c("P022", "P087")) {
+  file.name <- paste0("CNVclone_exprHT_", patient, ".tiff")
+  tiff(
+    filename = file.path(figures.out.dir, file.name),
+    units = "in",
+    width = 4,
+    height = 8,
+    res = 300,
+    bg = "white"
+  )
+  print(ht.list[[patient]])
+  dev.off()
+}
+```
+
+
+```{r}
+GSE.list <- list()
+for (patient in c("P009", "P022", "P027", "P087")) {
+  markers <- DGs.markers.list[[patient]] %>%
+    arrange(desc(mean.AUC)) %>%
+    dplyr::select("genename", "mean.AUC")
+  entrez_ids <- mapIds(
+    org.Hs.eg.db,
+    keys = markers$genename,
+    column = "ENTREZID",
+    keytype = "SYMBOL",
+    multiVals = "first"
+  )
+  valid_indices <- which(!is.na(entrez_ids))
+  
+  gene_list <- markers$mean.AUC[valid_indices]
+  names(gene_list) <- entrez_ids[valid_indices]
+  
+  GSE.list[[patient]] <- gsePathway(
+    geneList = gene_list,
+    organism = "human",
+    minGSSize = 10,
+    pvalueCutoff = 0.01,
+    verbose = F
+  )
+}
+lapply(GSE.list, as.data.frame)
+```
+
+```{r}
+lapply(GSE.list, as.data.frame) %>% 
+  lapply(., filter, p.adjust < 0.01, qvalue < 0.2)
+```
+
+```{r}
+GSA.intersection <- lapply(GSE.list, as.data.frame) %>% 
+  bind_rows(.id = "patient") %>% 
+  remove_rownames() %>% 
+  dplyr::select(patient, Description, NES) %>% 
+  pivot_wider(names_from = patient, values_from = NES) %>% 
+  na.omit()
+GSA.intersection
+```
+
+```{r}
+write.xlsx(
+  lapply(GSE.list, as.data.frame),
+  file = file.path(tables.out.dir, "CNVclones_GSA.xlsx")
+)
+
+write.xlsx(
+  GSA.intersection,
+  file = file.path(tables.out.dir, "CNVclones_GSA_intercestion.xlsx")
+)
+```
+
+
+```{r, fig.width=6, fig.height=7}
+relevant.categories.list <- list(
+  "P009" = c(
+    "TNFR2 non-canonical NF-kB pathway",
+    "Fc epsilon receptor (FCERI) signaling",
+    "FCERI mediated NF-kB activation",
+    "MAPK6/MAPK4 signaling",
+    "Signaling by the B Cell Receptor (BCR)",
+    "Regulation of PTEN stability and activity",
+    "G1/S DNA Damage Checkpoints",
+    "Signaling by NOTCH4",
+    "Dectin-1 mediated noncanonical NF-kB signaling",
+    "NIK-->noncanonical NF-kB signaling"
+  ),
+  "P022" = c(
+    "TNFR2 non-canonical NF-kB pathway",
+    "MAPK6/MAPK4 signaling",
+    "NIK-->noncanonical NF-kB signaling",
+    "Activation of NF-kappaB in B cells",
+    "Signaling by NOTCH4",
+    "Regulation of PTEN stability and activity",
+    "Dectin-1 mediated noncanonical NF-kB signaling"
+  ),
+  "P027" = c(
+    "TNFR2 non-canonical NF-kB pathway",
+    "G1/S DNA Damage Checkpoints",
+    "Signaling by the B Cell Receptor (BCR)",
+    "FCERI mediated NF-kB activation",
+    "Signaling by NOTCH4",
+    "Regulation of PTEN stability and activity",
+    "Dectin-1 mediated noncanonical NF-kB signaling",
+    "NIK-->noncanonical NF-kB signaling",
+    "Activation of NF-kappaB in B cells"
+  ),
+  "P087" = c(
+    "Signaling by the B Cell Receptor (BCR)",
+    "The role of GTSE1 in G2/M progression after G2 checkpoint",
+    "Regulation of PTEN stability and activity",
+    "G1/S DNA Damage Checkpoints",
+    "Signaling by NOTCH4",
+    "Activation of NF-kappaB in B cells",
+    "NIK-->noncanonical NF-kB signaling",
+    "Dectin-1 mediated noncanonical NF-kB signaling",
+    "MAPK6/MAPK4 signaling"
+  )
+)
+
+GSE.plots.list <- list()
+for(patient in c("P009", "P022", "P027", "P087")){
+  GSE.plots.list[[patient]] <- dotplot(GSE.list[[patient]],
+                                       showCategory = relevant.categories.list[[patient]],
+                                       color = "NES") + 
+    ggtitle(patient) +
+    scale_x_continuous(labels = scales::percent,
+                       limits = c(0.5, 1),
+                       name = "Gene ratio") +
+    theme_bw(base_size = 14)
+}
+GSE.plots.list
+```
+
+```{r}
+for(patient in names(GSE.plots.list)) {
+  file.name <- paste0("CNVclone_dotplot_", patient, ".tiff")
+  tiff(
+    filename = file.path(figures.out.dir, file.name),
+    units = "in",
+    width = 6,
+    height = 7,
+    res = 300,
+    bg = "white"
+  )
+  print(GSE.plots.list[[patient]])
+  dev.off()
+}
+```
+
+
+
+

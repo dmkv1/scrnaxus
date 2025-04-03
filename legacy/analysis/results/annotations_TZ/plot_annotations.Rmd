@@ -1,0 +1,115 @@
+---
+title: "Plotting normal cell annotations"
+output: html_notebook
+---
+
+TZ sent me cell type annotations. By his own words, "*V zasade se daji porovnavat jen stejne kompartmenty tj vzorky z PBMC s jinymi vzorky PBMC, ale uz ne s BM (protoze tam jsou jine bunecne typy v jinych zastoupenich).*". He also attached a barplot, which I'm recreating here to recolor and edit axes.
+
+```{r setup}
+library(tidyverse)
+library(openxlsx)
+```
+
+```{r}
+frequencies <- openxlsx::read.xlsx("cell_type_frequencies.xlsx") %>% 
+  select(-X1) %>% 
+  mutate(
+    cell_type = str_replace_all(cell_type, "_", " ")
+  )
+frequencies
+```
+
+```{r}
+unique(frequencies$cell_type) %>% 
+  length()
+```
+
+```{r, fig.width=10, fig.height=6}
+cell_type_colors <- c(
+  "Pre-B" = "#0500B2",
+  "transitional stage B-cell" = "#416ADB",
+  "B-cell naive" = "#2B9CFF",
+  "unswitched memory B-cell" = "#AAD7FF",
+  "switched memory B-cell" = "#4577F7",
+  "atypical memory B-cell" = "#BD91FF",
+  "plasma cells" = "#FF60BA",
+  
+  "CD4 naive T-cell" = "#ff7f0e",
+  "CD4 helper T-cell" = "#ff9d4d",
+  "CD4 cytotoxic T-cell" = "#ffbb6e",
+  "CD4 effector memory T-cell" = "#ffd599",
+  "CD4 central memory T-cell" = "#ffebcc",
+  
+  "CD8 T-cell" = "#d62728",
+  "CD8 central memory T-cell" = "#e74c3c",
+  "CD8 effector memory T-cell" = "#f1948a",
+  
+  "Treg" = "#bcbd22",
+  "MAIT" = "#FFC8C6",
+  "T-cell" = "#FF5900",
+  
+  "natural killer" = "#843c39",
+  "classical monocyte" = "#FF0087",
+  "non-classical monocyte" = "#7b4173",
+  "intermediate monocyte" = "#e7ba52",
+  "cDC 2" = "#6b6ecf",
+  "Leukocyte" = "#9467bd"
+)
+
+frequencies %>% mutate(
+  cell_type = factor(cell_type, levels = names(cell_type_colors))
+) %>% 
+  ggplot(aes(y = frequency, x = orig.ident)) +
+  geom_col(aes(fill = cell_type), position = "stack") +
+  labs(x = NULL, y = "Cell frequency (%)", fill = "Cell type") +
+  scale_y_continuous(labels = scales::percent, expand = c(0, 0)) +
+  scale_fill_manual(values = cell_type_colors) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Sample data
+data <- data.frame(
+  sample = factor(rep(letters[1:10], each = 10)),
+  group = rep(1:10, each = 10),
+  x = rep(1:10, times = 10),
+  y = runif(100)
+)
+
+# Annotation color bar data
+annotation_data <- data.frame(
+  sample = factor(letters[1:10]),
+  group = rep(1:10)
+)
+
+# Define colors for groups
+annotation_data <- annotation_data %>%
+  mutate(color = case_when(
+    group == 1 ~ "#1f77b4",
+    group == 2 ~ "#2874a6",
+    group == 3 ~ "#2e86c1",
+    group == 4 ~ "#3498db",
+    group == 5 ~ "#5dade2",
+    group == 6 ~ "#9c9ede",
+    group == 7 ~ "#d6eaf8",
+    group == 8 ~ "#ff7f0e",
+    group == 9 ~ "#ff9d4d",
+    group == 10 ~ "#ffbb6e"
+  ))
+
+# Plot
+ggplot(data, aes(x = x, y = y)) +
+  geom_point() +
+  
+  geom_tile(
+    data = annotation_data,
+    aes(x = as.numeric(sample), y = -0.1, fill = color),
+    height = 0.1, show.legend = FALSE) +
+  
+  scale_fill_identity() +
+  scale_x_continuous(breaks = 1:10, labels = letters[1:10]) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```

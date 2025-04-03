@@ -1,0 +1,503 @@
+---
+title: "DECENT DE analysis"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(openxlsx)
+library(scater)
+library(scran)
+library(ReactomePA)
+library(ComplexHeatmap)
+
+# Path to project folder
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+
+# Parallelization
+library(BiocParallel)
+bpp <- MulticoreParam()
+```
+
+```{r}
+iteration_input = "6_MCL_CNV"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration_input)
+sce.MCL <- readRDS(file = file.path(sce.dir, "sce.rds"))
+sce.MCL
+```
+
+```{r, fig.width=12, fig.height=6}
+sce.MCL.plot <- sce.MCL
+sce.MCL.plot$Sample <- sce.MCL.plot$sample_norep_plot
+sce.MCL.plot$Sample <- factor(sce.MCL.plot$Sample, 
+                              levels = levels(sce.MCL.plot$sample_norep) %>% str_replace_all(., "_", " "))
+
+plotReducedDim(sce.MCL.plot,
+               dimred = "TSNE_corrected_SamplePhase",
+               color_by = "patient",
+               other_fields = "timepoint") +
+  facet_wrap( ~ timepoint) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  xlim(-35, 40) + ylim(-40, 35) +
+  cowplot::theme_half_open(font_size = 14) +
+  theme(strip.text = element_text(face = "bold")) +
+  cowplot::panel_border(color = "grey50") +
+  labs(x = "TSNE 1", y = "TSNE 2", color = "Patient")
+```
+
+```{r, fig.width=11, fig.height=5.5, message=FALSE, warning=FALSE}
+plotReducedDim(sce.MCL.plot,
+               dimred = "TSNE_corrected_SamplePhase",
+               color_by = "Sample",
+               other_fields = "timepoint") +
+  facet_wrap( ~ timepoint) +
+  theme_bw() +
+  scale_color_manual(values = get_palettes("tableau20")) +
+  labs(color = "Sample") +
+  xlim(-35, 40) + ylim(-40, 35) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  cowplot::theme_half_open(font_size = 16) +
+  cowplot::panel_border(color = "grey50") +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+# Pseudobulk DE between clones
+
+## Output of `DECENT` package
+
+This output was pre-calculated. `DECENT` DE analysis outputs a table of genes compared between conditions with log fold changes, p values and stat value. Here that table is annotated and then plotted.
+
+```{r message=FALSE}
+DE.output.path <- file.path(wd, "scRNAseq/analysis/outputs/DE_DECENT_clone")
+
+clone.de.list <- list()
+samples <- patients
+for(samplename in samples){
+  filename <- paste0("DE_clone_", samplename, ".csv")
+  clone.de.list[[samplename]] <- read_csv(file.path(DE.output.path, samplename, filename))
+}
+
+sig.pvalue = 0.01
+sig.logfc = 2
+
+clone.de.list <- lapply(
+    clone.de.list,
+    mutate,
+    change = case_when(abs(logfc) > sig.logfc & pvalue < sig.pvalue & logfc < 0 ~ "down",
+                       abs(logfc) > sig.logfc & pvalue < sig.pvalue & logfc > 0 ~ "up",
+                       TRUE ~ "notsig"),
+    change = factor(change, levels = c("up", "down", "notsig"))
+  ) %>% 
+  lapply(arrange,
+         desc(abs(logfc)))
+
+clone.de.sig.list <- lapply(clone.de.list, filter, change != "notsig")
+clone.de.sig.list
+```
+
+```{r, fig.width=8, fig.height=6}
+timepoint.volcano.plots <- list()
+de.list.plot.by <- clone.de.list
+for (i in seq_along(de.list.plot.by)) {
+  timepoint.volcano.plots[[names(de.list.plot.by)[[i]]]] <-
+    ggplot(de.list.plot.by[[i]], aes(
+      x = logfc,
+      y = -log10(pvalue),
+      color = change
+    )) +
+    geom_point() +
+    scale_color_manual(values = c("red", "blue", "gray50")) +
+    geom_hline(
+      yintercept = -log10(sig.pvalue),
+      linetype = "dashed",
+      color = "firebrick"
+    ) +
+    geom_vline(
+      xintercept = c(-sig.logfc, sig.logfc),
+      linetype = "dashed",
+      color = "firebrick"
+    ) +
+    geom_point(data = filter(de.list.plot.by[[i]], change != "notsig")) +
+    
+    ggrepel::geom_text_repel(
+      data = filter(de.list.plot.by[[i]], change != "notsig"),
+      aes(label = gene),
+      show.legend = FALSE
+    ) +
+    
+    labs(
+      title = names(de.list.plot.by)[[i]],
+      x = expression( ~ Log[2] ~ "(fold change)"),
+      y = expression("-" ~ Log[10] ~ "(p value)")
+    ) +
+    scale_x_continuous(trans = "pseudo_log")
+}
+timepoint.volcano.plots
+```
+
+### Check a specific gene
+
+```{r, fig.width=6, fig.height=4}
+patient.test = "P087"
+gene.test <- "BCL2L10"
+
+plotExpression(
+  sce.MCL[, sce.MCL$patient == patient.test],
+  features = gene.test,
+  x = "CNV.group", color_by = "CNV.clone",
+  other_fields = "timepoint", ncol = 4
+) +
+  facet_wrap(~ timepoint, ncol = 1) +
+  labs(title = gene.test)
+```
+
+```{r, fig.width=12, fig.height=4}
+plotReducedDim(sce.MCL[, sce.MCL$patient == patient.test],
+               dimred = "TSNE_corrected_SamplePhase",
+               color_by = gene.test,
+               other_fields = "CNV.clone") +
+  facet_wrap(~ CNV.clone)
+```
+
+### Gene heatmaps for all patients
+
+```{r, fig.width=5, fig.height=8}
+ht.list <- list()
+for(patient.test in patients){
+  genes.to.plot <- clone.de.list[[patient.test]] %>% 
+  filter(change != "notsig") %>% 
+  arrange(desc(abs(stat))) %>% 
+  pull(gene)
+  
+  ht.list[[patient.test]] <- sce.MCL[, sce.MCL$patient == patient.test] %>%
+  plotGroupedHeatmap(
+    .,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = patient.test,
+    fontsize_row = 8,
+    zlim = c(-0.1, 0.1),
+    cluster_rows = T
+  )
+  
+  print(
+    grid::grid.draw(ht.list[[patient.test]]$gtable)
+  )
+}
+```
+
+### DE overlap between patients
+
+```{r}
+clone.de.sig.list %>% 
+  bind_rows(.id = "patient") %>% 
+  mutate(
+    patient = factor(patient, levels = patients)
+  ) %>% 
+  dplyr::select(patient, gene, logfc) %>% 
+  pivot_wider(names_from = patient, values_from = logfc) %>% 
+  filter(rowSums(is.na(.)) < 3)
+```
+
+```{r, fig.width=10, fig.height=12}
+plotReducedDim(
+  sce.MCL,
+  dimred = "TSNE_corrected_SamplePhase",
+  color_by = "PPM1L",
+  other_fields = c("patient", "CNV.clone")
+) +
+  facet_grid(patient ~ CNV.clone) +
+  theme_bw()
+```
+
+## GSEA of `DECENT` DE results
+
+### KEGG
+
+```{r}
+DE.kegg.out.list <- list()
+for (current_patient in patients) {
+  selected.markers <- clone.de.list[[current_patient]]
+  
+  is.de <- which(selected.markers$change != "notsig")
+  
+  entrez.ids <- AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db,
+    keys = selected.markers$gene,
+    column = "ENTREZID",
+    keytype = "SYMBOL"
+  )
+  
+  DE.kegg.out.list[[current_patient]] <-
+    limma::kegga(unique(entrez.ids[is.de]),
+                 species = "Hs",
+                 universe = unique(entrez.ids)) %>%
+    rownames_to_column("PathwayID") %>%
+    filter(!str_detect(PathwayID, "hsa05")) %>%
+    arrange(P.DE) %>%
+    filter(P.DE < 0.01)
+}
+DE.kegg.out.list
+```
+
+### Reactome
+
+```{r}
+DECENT.GSE.list <- list()
+for (current_patient in patients) {
+  genes.table <- clone.de.list[[current_patient]] %>% 
+    arrange(desc(stat))
+  
+  entrez.ids <- AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db,
+    keys = genes.table$gene,
+    column = "ENTREZID",
+    keytype = "SYMBOL"
+  )
+  
+  gene.ranks <- genes.table$stat
+  names(gene.ranks) <- entrez.ids
+  gene.ranks <- gene.ranks[!is.na(entrez.ids)]
+  
+  DECENT.GSE.list[[current_patient]] <- gsePathway(
+    gene.ranks[unique(names(gene.ranks))],
+    organism = "human",
+    pvalueCutoff = 0.01,
+    pAdjustMethod = "BH",
+    eps = 0,
+    seed = TRUE
+  )
+}
+
+# save as object for plotting
+saveRDS(DECENT.GSE.list, file = file.path(wd, "scRNAseq/analysis/results",
+                                          "DECENT.GSE.RPA.rds"))
+
+lapply(DECENT.GSE.list, as.data.frame)
+```
+
+```{r}
+lapply(DECENT.GSE.list[1:4], as.data.frame) %>% 
+  lapply(., dplyr::select, Description, NES, p.adjust) %>% 
+  lapply(., remove_rownames) %>% 
+  lapply(., arrange, desc(NES))
+```
+
+#### GSEA overlap heatmap
+
+```{r, fig.width=9, fig.height=4}
+DECENT.GSE.joined <- lapply(DECENT.GSE.list, as.data.frame) %>%
+  bind_rows(., .id = "patient") %>%
+  remove_rownames() %>%
+  dplyr::select(patient, Description, NES) %>%
+  pivot_wider(names_from = patient, values_from = NES) %>%
+  filter(rowSums(is.na(.)) < 2)
+
+DECENT.GSE.mat <- DECENT.GSE.joined %>%
+  column_to_rownames("Description") %>%
+  as.matrix()
+
+ht <- Heatmap(
+  matrix = DECENT.GSE.mat,
+  name = "NES",
+  na_col = "gray70",
+  cluster_rows = F,
+  cluster_columns = F,
+  row_names_side = "left",
+  column_names_side = "top",
+  column_names_rot = 0,
+  column_names_centered = T,
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(sprintf("%.1f", DECENT.GSE.mat[i, j]), x, y, gp = gpar(fontsize = 10))
+  }
+)
+
+draw(ht, padding = unit(c(2, 95, 2, 2), "mm"))
+```
+
+## Marker gene detection by `scran` (per OSCA)
+
+```{r}
+list.markers.DGs <- list()
+for (current_patient in patients) {
+  sce.test <- sce.MCL[, sce.MCL$patient == current_patient]
+  sce.test <- sce.test[, sce.test$timepoint == "DG"]
+  sce.test$CNV.clone <-
+    factor(sce.test$CNV.clone, levels = c("DGex", "DGs"))
+  
+  markers <- scoreMarkers(sce.test,
+                          groups = sce.test$CNV.clone,
+                          BPPARAM = bpp)
+  
+  list.markers.DGs[[current_patient]] <- markers[["DGs"]] %>%
+    as.data.frame() %>%
+    arrange(desc(abs(mean.logFC.detected))) %>%
+    rownames_to_column("gene")
+}
+list.markers.DGs
+```
+
+```{r}
+mean.logFC.threshold <- 2
+
+list.markers.DGs.sig <- list.markers.DGs %>% 
+  lapply(., function (x) filter(x, abs(mean.logFC.detected) > mean.logFC.threshold)) %>% 
+  lapply(., arrange, rank.AUC)
+list.markers.DGs.sig
+```
+
+```{r, fig.width=6.5, fig.height=5}
+list.markers.plots <- list()
+for(current_patient in patients){
+  list.markers.plots[[current_patient]] <- list.markers.DGs[[current_patient]] %>% 
+    ggplot(aes(x = mean.logFC.cohen, y = mean.AUC)) +
+    geom_point(color = "gray20") +
+    geom_point(
+      data = list.markers.DGs.sig[[current_patient]],
+      aes(color = mean.logFC.detected)) +
+    scale_color_gradient2(low = "blue", high = "red") +
+    theme_bw() +
+    labs(title = current_patient) +
+    ylim(0, 1) + xlim(-3, 3)
+}
+list.markers.plots
+```
+
+```{r, fig.width=5, fig.height=15}
+list.marker.heatmaps <- list()
+for(current_patient in patients){
+list.marker.heatmaps[[current_patient]] <- sce.MCL[, sce.MCL$patient == current_patient] %>% 
+  plotGroupedHeatmap(.,
+                     features = list.markers.DGs.sig[[current_patient]]$gene,
+                     group="CNV.clone",
+                     main = current_patient,
+                     center=TRUE,
+                     fontsize_row = 6
+                     ) %>% ggplotify::as.ggplot() +
+  labs(title = current_patient)
+}
+```
+
+This looks similar to DECENT but worse.
+
+### GSEA by `scran` markers
+
+#### KEGG
+
+```{r}
+scran.kegg.out.list <- list()
+
+for (current_patient in patients) {
+  selected.markers <- list.markers.DGs[[current_patient]]
+  
+  entrez.ids <- AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db,
+    keys = selected.markers$gene,
+    column = "ENTREZID",
+    keytype = "SYMBOL"
+  )
+  
+  is.de <- which(selected.markers$gene %in% list.markers.DGs.sig[[current_patient]]$gene)
+  
+  scran.kegg.out.list[[current_patient]] <-
+    limma::kegga(unique(entrez.ids[is.de]),
+                 species = "Hs",
+                 universe = unique(entrez.ids)) %>%
+    rownames_to_column("PathwayID") %>%
+    filter(!str_detect(PathwayID, "hsa05")) %>%
+    arrange(P.DE) %>%
+    filter(P.DE < 0.01)
+}
+scran.kegg.out.list
+```
+
+#### Reactome
+
+```{r}
+scran.PEA.list <- list()
+for (current_patient in patients) {
+  selected.markers <- list.markers.DGs[[current_patient]] %>% 
+    arrange(rank.logFC.detected)
+  
+  entrez.ids <- AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db,
+    keys = selected.markers$gene,
+    column = "ENTREZID",
+    keytype = "SYMBOL"
+  )
+  
+  scran.PEA.list[[current_patient]] <- enrichPathway(
+                       gene = entrez.ids,
+                       organism = "human",
+                       pvalueCutoff = 0.05,
+                       pAdjustMethod = "BH",
+                       qvalueCutoff = 0.2
+                     )
+}
+lapply(scran.PEA.list, as.data.frame)
+```
+
+```{r}
+scran.GSE.list <- list()
+for (current_patient in patients) {
+  genes.table <- list.markers.DGs[[current_patient]] %>%
+    arrange(rank.logFC.detected) %>%
+    dplyr::select(gene, mean.logFC.detected, rank.logFC.detected)
+  
+  entrez.ids <- AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db,
+    keys = genes.table$gene,
+    column = "ENTREZID",
+    keytype = "SYMBOL"
+  )
+  
+  gene.ranks <- genes.table$mean.logFC.detected
+  names(gene.ranks) <- entrez.ids
+  gene.ranks <- gene.ranks[!is.na(entrez.ids)]
+  
+  scran.GSE.list[[current_patient]] <- gsePathway(
+    gene.ranks,
+    organism = "human",
+    pvalueCutoff = 0.01,
+    pAdjustMethod = "BH",
+    nPermSimple = 10000,
+    eps = 0
+  )
+}
+lapply(scran.GSE.list, as.data.frame)
+```
+
+```{r, fig.width=6, fig.height=8}
+lapply(scran.GSE.list, dotplot, showCategory = 15)
+```
+
+# Comparison of `DECENT` and `scran` DE gene detection
+
+```{r}
+joined.sig.de <- list()
+for(current_patient in patients){
+  joined.sig.de[[current_patient]] <- full_join(
+    dplyr::select(clone.de.sig.list[[current_patient]], gene, "DECENT.lfc" = logfc),
+    dplyr::select(list.markers.DGs.sig[[current_patient]], gene, "markers.lfc" = mean.logFC.detected),
+    by = join_by(gene)
+  )
+}
+joined.sig.de
+```
+
+```{r}
+joined.sig.de.mat <- lapply(joined.sig.de, na.omit) %>% 
+  bind_rows(.id = "patient") %>% 
+  dplyr::select(-DECENT.lfc) %>% 
+  mutate(
+    patient = factor(patient, levels = patients)
+  ) %>% 
+  pivot_wider(names_from = patient, values_from = markers.lfc) %>% 
+  filter(rowSums(is.na(.)) < 4)
+joined.sig.de.mat
+```
+
+

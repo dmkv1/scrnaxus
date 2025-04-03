@@ -1,0 +1,280 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(ComplexHeatmap)
+
+library(scran)
+library(scater)
+
+# Parallelization
+library(BiocParallel)
+bpp <- MulticoreParam(workers = 16)
+
+random_seed_value = 17
+
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+
+iteration_input = "6_MCL_CNV"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration_input)
+```
+
+```{r}
+sce <- readRDS(file.path(sce.dir, "sce.rds"))
+colnames_to_store <- colData(sce) %>%
+  as.data.frame() %>%
+  select(
+    -contains("subsets_"),
+    -contains("top_"),
+    -contains("has_"),
+    -contains("proportion_")
+  ) %>%
+  colnames()
+colData(sce) <- colData(sce)[colnames_to_store]
+sce
+```
+
+```{r, fig.width=7, fig.height=2.5}
+plotReducedDim(sce, dimred = "TSNE_corrected_SamplePhase",
+               color_by = "CNV.clone",
+               other_fields = c("CNV.clone")
+               ) +
+  facet_grid(~ CNV.clone) +
+  theme_bw()
+```
+
+
+```{r, fig.width=10, fig.height=6}
+plotReducedDim(sce, dimred = "TSNE_corrected_SamplePhase",
+               color_by = "CNV.clone",
+               other_fields = c("patient", "CNV.clone")
+               ) +
+  facet_grid(CNV.clone ~ patient) +
+  theme_bw()
+```
+
+```{r}
+sce.DG <- sce[, sce$timepoint == "DG"]
+sce.DG$CNV.clone <- factor(sce.DG$CNV.clone, levels = c("DGex", "DGs"))
+unique(sce.DG$CNV.clone)
+```
+
+## Wilcoxon test for DGs vs DGex
+
+### All patients
+
+```{r}
+set.seed(random_seed_value)
+wilcox.subclones <- pairwiseWilcox(sce.DG, lfc = 0.5,
+                                   groups = sce.DG$CNV.clone,
+                                   BPPARAM = bpp
+                                   )
+wilcox.DG.subclones <- wilcox.subclones$statistics[[2]] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("genesymbol") %>% 
+  filter(p.value < 0.05 & FDR < 0.05) %>% 
+  arrange(AUC)
+wilcox.DG.subclones
+```
+
+```{r, fig.width=5, fig.height=8}
+genes.to.plot <- wilcox.DG.subclones$genesymbol
+
+plotGroupedHeatmap(
+    sce,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = "",
+    fontsize_row = 10,
+    # zlim = c(-0.5, 0.5),
+    cluster_rows = T
+  )
+```
+
+### All aggressive patients
+
+```{r}
+set.seed(random_seed_value)
+sce.DG.aggr <- sce.DG[, sce.DG$patient %in% c("P009", "P022", "P027", "P087")]
+
+wilcox.subclones.aggr <- pairwiseWilcox(
+  sce.DG.aggr,
+  lfc = 0.5,
+  groups = sce.DG.aggr$CNV.clone,
+  BPPARAM = bpp
+)
+wilcox.DG.subclones.aggr <- wilcox.subclones.aggr$statistics[[2]] %>%
+  as.data.frame() %>%
+  rownames_to_column("genesymbol")
+
+wilcox.DG.subclones.aggr.sig <- wilcox.DG.subclones.aggr %>% 
+  filter(p.value < 0.05 & FDR < 0.05) %>%
+  arrange(AUC)
+wilcox.DG.subclones.aggr.sig
+```
+
+```{r, fig.width=5, fig.height=5}
+genes.to.plot <- wilcox.DG.subclones.aggr.sig$genesymbol
+
+plotGroupedHeatmap(
+    sce,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = "",
+    fontsize_row = 10,
+    # zlim = c(-0.5, 0.5),
+    cluster_rows = T
+  )
+```
+
+### Separately by patient
+
+```{r}
+wilcox.test.results <- list()
+wilcox.test.results.sig <- list()
+for (patient in c("P009", "P022", "P027", "P087", "P069")) {
+  sce.patient <- sce.DG[, sce.DG$patient == patient]
+  
+  set.seed(random_seed_value)
+  test <- pairwiseWilcox(
+    sce.patient,
+    lfc = 0.5,
+    groups = sce.patient$CNV.clone,
+    BPPARAM = bpp
+  )
+  wilcox.test.results[[patient]] <- test$statistics[[2]] %>%
+    as.data.frame() %>%
+    rownames_to_column("genesymbol") %>%
+    arrange(AUC)
+  
+  results.sig <- wilcox.test.results[[patient]] %>%
+    filter(p.value < 0.05 & FDR < 0.05)
+  
+  if (dim(results.sig)[1] > 0) {
+    wilcox.test.results.sig[[patient]] <- results.sig
+  }
+}
+wilcox.test.results.sig
+```
+
+```{r, fig.width=4, fig.height=4}
+patient <- "P009"
+
+genes.to.plot <- wilcox.test.results.sig[[patient]]$genesymbol
+plotGroupedHeatmap(
+    sce,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = patient,
+    fontsize_row = 10,
+    cluster_rows = T
+  )
+```
+
+```{r, fig.width=4, fig.height=8}
+patient <- "P022"
+
+genes.to.plot <- wilcox.test.results.sig[[patient]]$genesymbol
+plotGroupedHeatmap(
+    sce,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = patient,
+    fontsize_row = 10,
+    cluster_rows = T
+  )
+```
+
+```{r, fig.width=4, fig.height=8}
+patient <- "P087"
+
+genes.to.plot <- wilcox.test.results.sig[[patient]]$genesymbol
+plotGroupedHeatmap(
+    sce,
+    features = genes.to.plot,
+    group = "CNV.clone",
+    center = TRUE,
+    main = patient,
+    fontsize_row = 10,
+    cluster_rows = T
+  )
+```
+
+## Pairwise t-tests
+
+### For all patients
+
+```{r}
+set.seed(random_seed_value)
+Ttest.subclones <- pairwiseTTests(sce.DG,
+                                  lfc = 0.5,
+                                  groups = sce.DG$CNV.clone,
+                                  BPPARAM = bpp)
+Ttest.subclones$statistics[[2]] %>%
+  as.data.frame() %>%
+  filter(p.value < 0.05 & FDR < 0.05) %>%
+  arrange(logFC)
+```
+
+### All aggressive patients
+
+```{r}
+set.seed(random_seed_value)
+sce.DG.aggr <- sce.DG[, sce.DG$patient %in% c("P009", "P022", "P027", "P087")]
+set.seed(random_seed_value)
+Ttest.subclones.aggr <- pairwiseTTests(
+  sce.DG.aggr,
+  lfc = 0.5,
+  groups = sce.DG.aggr$CNV.clone,
+  BPPARAM = bpp
+)
+Ttest.subclones.aggr$statistics[[2]] %>%
+  as.data.frame() %>%
+  filter(p.value < 0.05 & FDR < 0.05) %>%
+  arrange(logFC)
+```
+
+### For each patient separately
+
+```{r}
+Ttest.results.full <- list()
+Ttest.results.sig <- list()
+for (patient in c("P009", "P022", "P027", "P087", "P069")) {
+  sce.patient <- sce.DG[, sce.DG$patient == patient]
+  
+  set.seed(random_seed_value)
+  test <- pairwiseTTests(
+    sce.patient,
+    lfc = 0.5,
+    groups = sce.patient$CNV.clone,
+    BPPARAM = bpp
+  )
+  Ttest.results.full[[patient]] <- test$statistics[[2]] %>%
+    as.data.frame() %>%
+    rownames_to_column("genesymbol")
+  
+  Ttest.results.sig[[patient]] <- Ttest.results.full[[patient]] %>% 
+    filter(p.value < 0.05 & FDR < 0.05) %>%
+    arrange(logFC)
+}
+Ttest.results.sig
+```
+
+
+
+
+
+
+
+
+
+

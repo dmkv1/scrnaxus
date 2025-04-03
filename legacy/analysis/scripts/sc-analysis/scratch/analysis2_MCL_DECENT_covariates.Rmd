@@ -1,0 +1,112 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Trying out running DECENT::decent function on a joined SCE to test if it can calculate DE while accounting for replicate (patient) cofactor (it can't).
+
+```{r}
+suppressMessages(library(tidyverse))
+suppressMessages(library(openxlsx))
+suppressMessages(library(scater))
+suppressMessages(library(DECENT))
+
+# Path to project folder
+wd <- "~/scrnaseq-clonal2"
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+
+output.path <- file.path(wd, "scRNAseq/analysis/outputs/DE_DECENT_clone")
+
+iteration_input = "6_MCL_CNV"
+
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration_input)
+sce.MCL <- readRDS(file = file.path(sce.dir, "sce.rds"))
+```
+
+```{r}
+set.seed(1)
+sample.indexes <- colData(sce.MCL) %>% 
+  as.data.frame() %>% 
+  mutate(
+    index = row_number(),
+    .before = everything()
+  ) %>% 
+  filter(timepoint == "DG") %>% 
+  group_by(patient, CNV.clone) %>%
+  slice_sample(n = 100) %>%
+  pull(index)
+
+sce.sample <- sce.MCL[, sample.indexes]
+sce.sample$CNV.clone <- factor(sce.sample$CNV.clone, levels = c("DGex", "DGs"))
+sce.sample
+```
+
+```{r}
+plotTSNE(sce.MCL)
+```
+
+
+```{r}
+plotTSNE(sce.sample, color_by = "patient",
+         other_fields = "CNV.clone") +
+  facet_wrap(~ CNV.clone)
+```
+
+```{r}
+mat <- counts(sce.sample)
+  
+# at least > 3% non-zero counts
+mat <- mat[(rowSums(mat == 0) / ncol(mat)) * 100 > 3, ]
+  
+# > 5 non-zero counts
+mat <- mat[rowSums(mat != 0) > 5,]
+
+output.path <- "~/scrnaseq-clonal2/scRNAseq/analysis/outputs/DE_DECENT_covariates/DGsvsDGex_patient"
+
+de.table <- decent(
+    data.obs = as.matrix(mat),
+    X = sce.sample$patient ~ sce.sample$CNV.clone,
+    use.spikes = F,
+    normalize = "ML",
+    CE.range = c(0.02, 0.1),
+    # specify the range of the ranked random capture efficiency
+    parallel = TRUE,
+    n.cores = 64,
+    dir = output.path
+  )
+```
+
+```{r}
+de.table %>% 
+  write.xlsx(., file.path(output.path, "result.xlsx"))
+```
+
+```{r}
+mat <- counts(sce.sample)
+  
+# at least > 3% non-zero counts
+mat <- mat[(rowSums(mat == 0) / ncol(mat)) * 100 > 3, ]
+  
+# > 5 non-zero counts
+mat <- mat[rowSums(mat != 0) > 5,]
+
+output.path <- "~/scrnaseq-clonal2/scRNAseq/analysis/outputs/DE_DECENT_covariates/DGsvsDGex_noCovar"
+dir.create(output.path)
+rm(de.table)
+de.table <- decent(
+    data.obs = as.matrix(mat),
+    X = ~ sce.sample$CNV.clone,
+    use.spikes = F,
+    normalize = "ML",
+    CE.range = c(0.02, 0.1),
+    # specify the range of the ranked random capture efficiency
+    parallel = TRUE,
+    n.cores = 64,
+    dir = output.path
+  )
+write.xlsx(de.table, file.path(output.path, "result.xlsx"))
+```
+
+
+
+

@@ -1,0 +1,112 @@
+---
+title: "R Notebook"
+---
+
+```{r setup}
+library(tidyverse)
+library(cowplot)
+library(openxlsx)
+
+# SC methods
+library(scran)
+library(scater)
+
+# Path to project folder
+wd <- here::here()
+source(file.path(wd, "scRNAseq/analysis/scripts/colors.R"))
+source(file.path(wd, "scRNAseq/analysis/scripts/setup.R"))
+```
+
+# Load the SCE
+
+```{r}
+iteration = "6_MCL_CNV"
+sce.dir <- file.path(wd, "scRNAseq/analysis/outputs", iteration)
+
+infercnv.dir <- file.path(wd, "scRNAseq/analysis/outputs/inferCNV_trees_kclusters")
+
+random_seed_value <- 17
+```
+
+```{r}
+samples.df <- read.xlsx(file.path(sce.dir, "cell_metadata.xlsx")) %>% 
+  mutate(
+    sample_norep = str_remove(sample, "_rep[0-9]"),
+    patient = factor(patient, levels = patients),
+    timepoint = factor(timepoint, levels = timepoints),
+    compartment = factor(compartment, levels = compartments)
+  )
+samples.df
+```
+
+```{r}
+sce <- readRDS(file = file.path(sce.dir, "sce.rds"))
+sce
+```
+
+```{r}
+library(infercnv)
+icnvobj <- readRDS(
+  file.path(wd, "scRNAseq/analysis/outputs/inferCNV_trees_kclusters/P087/22_denoiseHMMi6.rand_trees.NF_NA.SD_1.5.NL_FALSE.infercnv_obj")
+)
+```
+
+```{r}
+sce.DGs <- sce[, sce$CNV.clone == "DGs" & sce$patient == "P087"]
+```
+
+```{r}
+DGs.barcodes <- paste(sce.DGs$Barcode, sce.DGs$Sample, sep = "-")
+
+gene_order <- icnvobj@gene_order %>% 
+  rownames_to_column("genename") %>% 
+  filter(chr %in% c("chr19", "chr22"))
+
+gene_order$mean <- icnvobj@expr.data[gene_order$genename, DGs.barcodes] %>% 
+  as.data.frame() %>% 
+  rowwise() %>%
+  mutate(mean = mean(c_across(everything()))) %>% 
+  pull(mean)
+
+gene_order$median <- icnvobj@expr.data[gene_order$genename, DGs.barcodes] %>% 
+  as.data.frame() %>% 
+  rowwise() %>%
+  mutate(median = median(c_across(everything()))) %>% 
+  pull(median)
+
+gene_order <- gene_order %>% 
+  mutate(
+    CN = case_when(mean > 1.025 ~ "amp", mean < 0.975 ~ "del", TRUE ~ "normal")
+  )
+
+gene_order
+```
+
+```{r}
+gene_order %>% 
+  filter(CN == "amp", mean > 1.15)
+```
+
+
+```{r, fig.width=10, fig.height=5}
+ggpubr::ggarrange(nrow = 1, common.legend = T,
+                  gene_order %>% 
+  filter(chr == "chr19") %>% 
+  ggplot(aes(x = start, y = mean)) +
+  geom_hline(yintercept = 1, color = "gray40") +
+  geom_point(aes(color = CN)) +
+  scale_color_manual(values = c("amp" = "red", "del" = "blue", normal = "gray10")) +
+  scale_x_continuous(breaks = c(281040, 4724673, 34404384, 46746994)),
+  gene_order %>% 
+  filter(chr == "chr22") %>% 
+  ggplot(aes(x = start, y = mean)) +
+  geom_hline(yintercept = 1, color = "gray40") +
+  geom_point(aes(color = CN)) +
+  scale_color_manual(values = c("amp" = "red", "del" = "blue", normal = "gray10")) +
+  scale_x_continuous(breaks = c(17084954, 26512505))
+)
+```
+
+
+
+
