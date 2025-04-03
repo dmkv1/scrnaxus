@@ -1,11 +1,14 @@
 .nextflow/
+work/
+
+.Rproj.user/
 
 alignment/samples
 analysis/outputs/*
 analysis/results/*
 docker compose/rstudio-server-scrnaseq/STAR
 
-*.log
+*.log*
 *.txt
 
 *.nb.html
