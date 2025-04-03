@@ -1,20 +1,39 @@
-// modules/alignment.nf
 
+workflow ALIGNMENT {
+    take:
+    ch_input // Channel: [ sample_id, expected_cells, fq_r1, fq_r2 ]
+    ref_dir // Path: STAR reference directory
+    gtf_file // Path: GTF file
+    cb_whitelist // Path: Cell barcode whitelist
+
+    main:
+    STAR_ALIGNMENT(ch_input, ref_dir, gtf_file, cb_whitelist)
+
+    emit:
+    counts = STAR_ALIGNMENT.out.counts
+    versions = STAR_ALIGNMENT.out.versions
+}
 process STAR_ALIGNMENT {
     tag "${sample_id}"
-    
+
     input:
     tuple val(sample_id), val(expected_cells), path(fq_r1), path(fq_r2)
     path ref_dir
     path gtf_file
     path cb_whitelist
-    
+
     output:
     tuple val(sample_id), val(expected_cells), path("${sample_id}_Solo.out"), emit: counts
     path "versions.yml", emit: versions
-    
+
     script:
+    def gtf_filename = gtf_file.getName()
+    def unzip_gtf = gtf_filename.endsWith('.gz') ? "gunzip -c ${gtf_file} > uncompressed.gtf && GTF_FILE=uncompressed.gtf" : "GTF_FILE=${gtf_file}"
+
     """
+    # Decompress GTF file if needed
+    ${unzip_gtf}
+    
     STAR \\
         --genomeLoad NoSharedMemory \\
         --runThreadN ${task.cpus} \\
@@ -43,7 +62,7 @@ process STAR_ALIGNMENT {
         --soloCellFilter None \\
         --soloFeatures Gene GeneFull \\
         --genomeDir ${ref_dir} \\
-        --sjdbGTFfile ${gtf_file} \\
+        --sjdbGTFfile \$GTF_FILE \\
         --soloCBwhitelist ${cb_whitelist} \\
         --readFilesIn ${fq_r2} ${fq_r1} \\
         --outFileNamePrefix "${sample_id}_"
@@ -53,19 +72,4 @@ process STAR_ALIGNMENT {
         star: \$(STAR --version | sed -e "s/STAR_//g")
     END_VERSIONS
     """
-}
-
-workflow ALIGNMENT {
-    take:
-    ch_input       // Channel: [ sample_id, expected_cells, fq_r1, fq_r2 ]
-    ref_dir        // Path: STAR reference directory
-    gtf_file       // Path: GTF file
-    cb_whitelist   // Path: Cell barcode whitelist
-    
-    main:
-    STAR_ALIGNMENT(ch_input, ref_dir, gtf_file, cb_whitelist)
-    
-    emit:
-    counts = STAR_ALIGNMENT.out.counts
-    versions = STAR_ALIGNMENT.out.versions
 }
