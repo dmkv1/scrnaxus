@@ -67,7 +67,7 @@ workflow {
     }
 
     // Execute QC module
-    QC(ALIGNMENT.out.counts)
+    QC(ALIGNMENT.out.counts, Channel.value(params.seed))
 
 }
 

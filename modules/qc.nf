@@ -1,27 +1,31 @@
 workflow QC {
     take:
-    counts_ch
+    counts
+    seed
 
     main:
-    CREATE_SCE(counts_ch)
+    DROPLETS_TO_CELLS(counts, seed)
 
     emit:
-    sce_object = CREATE_SCE.out.sce_object
+    cells_sce = DROPLETS_TO_CELLS.out.cells_sce
+    droplets_sce = DROPLETS_TO_CELLS.out.droplets_sce
 }
 
-process CREATE_SCE {
+process DROPLETS_TO_CELLS {
     tag "${sample_id}"
-
-    container 'https://depot.galaxyproject.org/singularity/bioconductor-dropletutils:1.22.0--r43hf17093f_0'
+    publishDir "${params.outdir}/droplets_to_cells/${sample_id}/", mode: 'copy'
 
     input:
     tuple val(sample_id), val(expected_cells), val(patient_id), val(timepoint), val(compartment), path(counts_dir)
+    val seed
 
     output:
-    tuple val(sample_id), path("${sample_id}_unfiltered.sce"), emit: sce_object
+    tuple val(sample_id), path("${sample_id}_cells.sce"), emit: cells_sce
+    tuple val(sample_id), path("${sample_id}_droplets.sce"), emit: droplets_sce
+    path("FDRplot_${sample_id}.png")
 
     script:
     """
-    droplets_load.R "${sample_id}" "${expected_cells}" "${patient_id}" "${timepoint}" "${compartment}" "${counts_dir}"
+    droplets_to_cells.R ${seed} "${sample_id}" "${expected_cells}" "${patient_id}" "${timepoint}" "${compartment}" "${counts_dir}"
     """
 }
