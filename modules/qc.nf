@@ -22,6 +22,6 @@ process CREATE_SCE {
 
     script:
     """
-    echo "${sample_id}" "${expected_cells}" "${patient_id}" "${timepoint}" "${compartment}" "${counts_dir}"
+    droplets_load.R "${sample_id}" "${expected_cells}" "${patient_id}" "${timepoint}" "${compartment}" "${counts_dir}"
     """
 }

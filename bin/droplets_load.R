@@ -2,8 +2,10 @@
 args <- commandArgs(trailingOnly = TRUE)
 
 # Load the libraries
-library(DropletUtils)
-library(SingleCellExperiment)
+suppressPackageStartupMessages({
+    library(SingleCellExperiment)
+    library(DropletUtils)
+})
 
 # Get the sample data from NextFlow
 sample_id <- args[1]
@@ -16,15 +18,16 @@ counts_dir <- args[6]
 
 cat(
     "\nSample:", sample_id,
-    "\nExpected cell:", expected_cells,
+    "\nExpected cells:", expected_cells,
     "\nPatient:", patient_id,
-    "\nTimepoints:", timepoint,
+    "\nTimepoint:", timepoint,
     "\nCompartment:", compartment,
     "\nPath:", counts_dir
 )
 
-
 sample_path <- file.path(counts_dir, "/Gene/raw")
+
+cat("\n\nLoading counts...\n")
 
 # Load the counts into an SCE
 sce <- DropletUtils::read10xCounts(
@@ -33,11 +36,15 @@ sce <- DropletUtils::read10xCounts(
     col.names = TRUE
 )
 
+cat("\nInitial SCE:\n\n")
+print(sce)
+
 # Calculate library sizes for each droplet
 libSizes <- colSums(assays(sce)$counts)
 
 # Remove droplets that are completely empty
 sce <- sce[, libSizes > 0]
+cat("\n\nRemoved droplets with zero library sizes.")
 
 # Assing sample column values
 sce[["Patient"]] <- patient_id
@@ -49,5 +56,9 @@ colnames(sce) <- paste(colData(sce)[["Barcode"]],
     sep = "-"
 )
 
+cat("\n\nWriting SCE:\n\n")
+print(sce)
+
 # Write the output
-saveRDS(sce, "${sample_id}_unfiltered.sce")
+saveRDS(sce, paste0(sample_id, "_unfiltered.sce"))
+cat("\nDone!")
