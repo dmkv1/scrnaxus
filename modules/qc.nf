@@ -3,25 +3,25 @@ workflow QC {
     counts_ch
 
     main:
-    QC_PROCESS(counts_ch)
+    CREATE_SCE(counts_ch)
 
     emit:
-    filtered_counts = QC_PROCESS.out.filtered_counts
+    sce_object = CREATE_SCE.out.sce_object
 }
 
-process QC_PROCESS {
+process CREATE_SCE {
     tag "${sample_id}"
 
+    container 'https://depot.galaxyproject.org/singularity/bioconductor-dropletutils:1.22.0--r43hf17093f_0'
+
     input:
-    tuple val(sample_id), val(expected_cells), path(counts_dir)
+    tuple val(sample_id), val(expected_cells), val(patient_id), val(timepoint), val(compartment), path(counts_dir)
 
     output:
-    tuple val(sample_id), path("${sample_id}_filtered"), emit: filtered_counts
+    tuple val(sample_id), path("${sample_id}_unfiltered.sce"), emit: sce_object
 
     script:
     """
-    mkdir -p ${sample_id}_filtered
-    cp -r ${counts_dir}/Gene/filtered/* ${sample_id}_filtered/
-    echo "QC process completed for ${sample_id}" > ${sample_id}_filtered/qc_log.txt
+    echo "${sample_id}" "${expected_cells}" "${patient_id}" "${timepoint}" "${compartment}" "${counts_dir}"
     """
 }

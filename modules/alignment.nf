@@ -1,4 +1,3 @@
-
 workflow ALIGNMENT {
     take:
     ch_input // Channel: [ sample_id, expected_cells, fq_r1, fq_r2 ]
@@ -15,15 +14,16 @@ workflow ALIGNMENT {
 }
 process STAR_ALIGNMENT {
     tag "${sample_id}"
+    publishDir "${params.outdir}/alignment", mode: 'copy'
 
     input:
-    tuple val(sample_id), val(expected_cells), path(fq_r1), path(fq_r2)
+    tuple val(sample_id), val(expected_cells), val(patient_id), val(timepoint), val(compartment), path(fq_r1), path(fq_r2)
     path ref_dir
     path gtf_file
     path cb_whitelist
 
     output:
-    tuple val(sample_id), val(expected_cells), path("${sample_id}_Solo.out"), emit: counts
+    tuple val(sample_id), val(expected_cells), val(patient_id), val(timepoint), val(compartment), path("${sample_id}_Solo.out"), emit: counts
     path "versions.yml", emit: versions
 
     script:

@@ -6,7 +6,6 @@ nextflow.enable.dsl = 2
 include { GENOME_INDEX } from './modules/genome_index'
 include { ALIGNMENT } from './modules/alignment'
 include { QC } from './modules/qc'
-include { ANALYSIS } from './modules/analysis'
 
 // Define the workflow
 workflow {
@@ -32,6 +31,9 @@ workflow {
         .splitCsv(header: true)
         .map { row ->
             def sample_id = row.sample
+            def patient_id = row.patient
+            def timepoint = row.timepoint
+            def compartment = row.compartment
             def expected_cells = row.expected_cells.toInteger()
             def fq_r1 = file(row.fq_r1)
             def fq_r2 = file(row.fq_r2)
@@ -43,7 +45,7 @@ workflow {
                 exit(1, "ERROR: Read 2 fastq file does not exist: ${fq_r2}")
             }
 
-            return [sample_id, expected_cells, fq_r1, fq_r2]
+            return [sample_id, patient_id, timepoint, compartment, expected_cells, fq_r1, fq_r2]
         }
 
     // Run genome indexing if requested
@@ -67,8 +69,6 @@ workflow {
     // Execute QC module
     QC(ALIGNMENT.out.counts)
 
-    // Execute analysis module
-    ANALYSIS(QC.out.filtered_counts)
 }
 
 def helpMessage() {
