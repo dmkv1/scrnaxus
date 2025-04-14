@@ -8,28 +8,35 @@ path_sce_cells <- args[3]
 path_sce_droplets <- args[4]
 
 cat(
-    "\nSample:", sample_id,
-    "\nSCE cells path:", path_sce_cells
+    "\nSample: ", sample_id,
+    "\nCells SCE: ", path_sce_cells,
+    "\nDroplets SCE: ", path_sce_cells
 )
+
+seed = 42
+set.seed(seed)
 
 # Load the libraries
 suppressPackageStartupMessages({
-    library(dplyr)
+  library(decontX)
 })
 
+# Load SCEs
 cat("\n\nLoading cells SCE...\n")
-
-# Load the counts into an SCE
 sce_cells <- readRDS(path_sce_cells)
 print(sce_cells)
 
-# Mock script
-sce_cells <- sce_cells[, 1:10]
+cat("\n\nLoading droplets SCE...\n")
+sce_droplets <- readRDS(path_sce_droplets)
+print(sce_droplets)
 
-cat("\n\nWriting cells SCE:\n\n")
-print(sce_cells)
+# Conduct RNA decontamination
+decont_sce <- decontX(sce_cells, background = sce_droplets)
+
+cat("\n\nWriting decontaminated SCE:\n")
+print(decont_sce)
 
 # Write the output
-saveRDS(sce_cells, paste0(sample_id, "_decont.sce"))
+saveRDS(decont_sce, paste0(sample_id, "_decont.sce"))
 
 cat("\nDone!")

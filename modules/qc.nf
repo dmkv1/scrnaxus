@@ -8,7 +8,9 @@ workflow QC {
 
     combined_sce = DROPLETS_TO_CELLS.out.cells_sce.join(DROPLETS_TO_CELLS.out.droplets_sce)
 
-    AMBIENT_RNA(combined_sce, seed)
+    AMBIENT_RNA_REMOVAL(combined_sce, seed)
+    
+    DOUBLET_DETECTION(AMBIENT_RNA_REMOVAL.out.decont_sce, seed)
 
     emit:
     cells_sce = DROPLETS_TO_CELLS.out.cells_sce
@@ -34,9 +36,11 @@ process DROPLETS_TO_CELLS {
     """
 }
 
-process AMBIENT_RNA {
+process AMBIENT_RNA_REMOVAL {
     tag "${sample_id}"
     publishDir "${params.outdir}/ambient_rna/${sample_id}/", mode: 'copy'
+
+    container "quay.io/biocontainers/bioconductor-decontx:1.4.0--r44he5774e6_0"
 
     input:
     tuple val(sample_id), path(cells_sce), path(droplets_sce)
@@ -49,5 +53,21 @@ process AMBIENT_RNA {
     """
     ambient_RNA.R ${seed} "${sample_id}" "${cells_sce}" "${droplets_sce}"
     """
+}
 
+process DOUBLET_DETECTION {
+    tag "${sample_id}"
+    publishDir "${params.outdir}/doublets/${sample_id}/", mode: 'copy'
+
+    input:
+    tuple val(sample_id), path(decont_sce)
+    val seed
+
+    output:
+    tuple val(sample_id), path("${sample_id}_decont.sce"), emit: decont_sce
+
+    script:
+    """
+    doublets.R ${seed} "${sample_id}" "${decont_sce}"
+    """
 }
