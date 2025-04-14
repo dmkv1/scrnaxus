@@ -33,10 +33,17 @@ print(sce_droplets)
 # Conduct RNA decontamination
 decont_sce <- decontX(sce_cells, background = sce_droplets)
 
+# Swap counts and decontaminated counts, store the original counts
+assay(sce, "raw_counts") <- counts(sce)
+assay(sce, withDimnames=FALSE) <- counts(sce, assay="decontXcounts")
+
 cat("\n\nWriting decontaminated SCE:\n")
 print(decont_sce)
 
 # Write the output
 saveRDS(decont_sce, paste0(sample_id, "_decont.sce"))
 
-cat("\nDone!")
+# Log package versions
+print(sessionInfo())
+# Force garbage collection
+gc()

@@ -6,49 +6,42 @@ seed <- args[1]
 sample_id <- args[2]
 path_sce <- args[3]
 
-cat(
-    "\nSample: ", sample_id,
-    "\nInput SCE: ", path_sce
-)
-
-seed = 42
-set.seed(seed)
-
 # Load the libraries
 suppressPackageStartupMessages({
   library(scDblFinder)
 })
 
+seed = 42
+set.seed(seed)
+
 # Load SCEs
-cat("\n\nLoading cells SCE...\n")
 sce <- readRDS(path_sce)
-print(sce)
 
-clusters_igraph <- scran::quickCluster(
+# Annotate the doublets
+sce <- scDblFinder(
   sce,
-  method = "igraph"
-  )
-
-doublet_scores <- scDblFinder(
-  sce,
-  clusters = factor(clusters_igraph),
-  returnType = "table"
+  clusters = FALSE
 )
 
-doublet_calls <-
-  doubletThresholding(
-    doublet_scores,
-    method = "griffiths",
-    returnType = "call"
-  )
+# Extract metrics
+n_singlets <- sum(sce$scDblFinder.class == "singlet")
+n_doublets <- sum(sce$scDblFinder.class == "doublet")
+doublet_rate <- n_doublets / (n_singlets + n_doublets)
 
-# Assign doublet counts
-sce$scDblFinder_calls <- doublet_calls
+metrics <- list(
+  sample_id = sample_id,
+  n_singlets = n_singlets,
+  n_doublets = n_doublets,
+  doublet_rate = doublet_rate
+)
+writeLines(jsonlite::toJSON(metrics, pretty=TRUE), paste0(sample_id, "_doublet_metrics.json"))
 
-cat("\n\nWriting doublet-labbeled SCE:\n")
+# Write the SCE
+cat("\n\nWriting doublet-annotated SCE:\n\n")
 print(sce)
-
-# Write the output
 saveRDS(sce, paste0(sample_id, "_singlets.sce"))
+cat("\nDone!\n")
 
-cat("\nDone!")
+# Print session info and collect garbage before exiting
+print(sessionInfo())
+gc()

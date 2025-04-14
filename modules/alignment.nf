@@ -14,7 +14,7 @@ workflow ALIGNMENT {
 }
 process STAR_ALIGNMENT {
     tag "${sample_id}"
-    publishDir "${params.outdir}/alignment", mode: 'copy'
+    publishDir "${params.outdir}/${sample_id}/alignment", mode: 'copy'
 
     container 'quay.io/biocontainers/star:2.7.11a--h0033a41_0'
 
