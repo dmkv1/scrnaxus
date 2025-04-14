@@ -15,6 +15,8 @@ process STAR_INDEX {
     tag "Genome indexing"
     publishDir "${params.outdir}/genome_index", mode: 'copy'
 
+    container 'quay.io/biocontainers/star:2.7.11a--h0033a41_0'
+
     input:
     path genome_fasta
     path gtf_file

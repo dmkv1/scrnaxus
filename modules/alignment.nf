@@ -16,6 +16,8 @@ process STAR_ALIGNMENT {
     tag "${sample_id}"
     publishDir "${params.outdir}/alignment", mode: 'copy'
 
+    container 'quay.io/biocontainers/star:2.7.11a--h0033a41_0'
+
     input:
     tuple val(sample_id), val(expected_cells), val(patient_id), val(timepoint), val(compartment), path(fq_r1), path(fq_r2)
     path ref_dir
@@ -35,32 +37,32 @@ process STAR_ALIGNMENT {
     ${unzip_gtf}
     
     STAR \\
-        --genomeLoad NoSharedMemory \\
+        --genomeLoad ${params.starsolo.genomeLoad} \\
         --runThreadN ${task.cpus} \\
-        --readFilesCommand zcat \\
-        --outFilterType BySJout \\
-        --limitBAMsortRAM 128000000000 \\
-        --outSAMtype BAM SortedByCoordinate \\
-        --outSAMunmapped Within \\
-        --outSAMattributes NH HI AS nM CR CY UR UY GX GN CB UB \\
-        --outFilterScoreMin 30 \\
-        --outFilterMultimapNmax 10 \\
-        --outSAMmultNmax 1 \\
-        --soloMultiMappers EM \\
-        --outMultimapperOrder Random \\
-        --clipAdapterType CellRanger4 \\
-        --soloType CB_UMI_Simple \\
-        --soloStrand Forward \\
-        --soloCBstart 1 \\
-        --soloCBlen 16 \\
-        --soloUMIstart 17 \\
-        --soloUMIlen 10 \\
-        --soloBarcodeReadLength 0 \\
-        --soloUMIdedup 1MM_CR \\
-        --soloUMIfiltering MultiGeneUMI_CR \\
-        --soloCBmatchWLtype 1MM_multi_Nbase_pseudocounts \\
-        --soloCellFilter None \\
-        --soloFeatures Gene GeneFull \\
+        --readFilesCommand ${params.starsolo.readFilesCommand} \\
+        --outFilterType ${params.starsolo.outFilterType} \\
+        --limitBAMsortRAM ${params.starsolo.limitBAMsortRAM} \\
+        --outSAMtype ${params.starsolo.outSAMtype} \\
+        --outSAMunmapped ${params.starsolo.outSAMunmapped} \\
+        --outSAMattributes ${params.starsolo.outSAMattributes} \\
+        --outFilterScoreMin ${params.starsolo.outFilterScoreMin} \\
+        --outFilterMultimapNmax ${params.starsolo.outFilterMultimapNmax} \\
+        --outSAMmultNmax ${params.starsolo.outSAMmultNmax} \\
+        --soloMultiMappers ${params.starsolo.soloMultiMappers} \\
+        --outMultimapperOrder ${params.starsolo.outMultimapperOrder} \\
+        --clipAdapterType ${params.starsolo.clipAdapterType} \\
+        --soloType ${params.starsolo.soloType} \\
+        --soloStrand ${params.starsolo.soloStrand} \\
+        --soloCBstart ${params.starsolo.soloCBstart} \\
+        --soloCBlen ${params.starsolo.soloCBlen} \\
+        --soloUMIstart ${params.starsolo.soloUMIstart} \\
+        --soloUMIlen ${params.starsolo.soloUMIlen} \\
+        --soloBarcodeReadLength ${params.starsolo.soloBarcodeReadLength} \\
+        --soloUMIdedup ${params.starsolo.soloUMIdedup} \\
+        --soloUMIfiltering ${params.starsolo.soloUMIfiltering} \\
+        --soloCBmatchWLtype ${params.starsolo.soloCBmatchWLtype} \\
+        --soloCellFilter ${params.starsolo.soloCellFilter} \\
+        --soloFeatures ${params.starsolo.soloFeatures} \\
         --genomeDir ${ref_dir} \\
         --sjdbGTFfile \$GTF_FILE \\
         --soloCBwhitelist ${cb_whitelist} \\
