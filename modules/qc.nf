@@ -75,7 +75,7 @@ process CELL_QC {
 
     output:
     tuple val(sample_id), path("${sample_id}_cell_QC.nb.html"), emit: report
-    // tuple val(sample_id), path("${sample_id}_clean.sce"), emit: sce
+    tuple val(sample_id), path("${sample_id}_cells.sce"), emit: sce
 
     script:
     """
@@ -88,6 +88,7 @@ process CELL_QC {
                     nUMI_thresh = '${params.qc.nUMI_thresh}',
                     nGenes_thresh = '${params.qc.nGenes_thresh}',
                     mitochondrial_thresh = '${params.qc.mitochondrial_thresh}',
+                    cluster_discard_thresh = '${params.qc.cluster_discard_thresh}',
                     seed = ${seed}
                     ))"
     """
