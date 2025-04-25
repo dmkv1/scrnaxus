@@ -3,12 +3,48 @@
 nextflow.enable.dsl = 2
 
 // Import modules
+// Alignment
 include { GENOME_INDEX } from './modules/genome_index'
 include { ALIGNMENT } from './modules/alignment'
-include { QC } from './modules/qc'
+// Droplet processing
+include { DROPLETS_TO_CELLS } from './modules/qc'
+include { DOUBLET_DETECTION } from './modules/qc'
+include { CELL_QC } from './modules/qc'
+
+def helpMessage() {
+    log.info(
+        """
+    =========================================
+    scRNA-seq Pipeline
+    =========================================
+    Usage:
+    nextflow run main.nf --input samplesheet.csv --genome_fasta /path/to/genome.fa --gtf_file /path/to/gtf --cb_whitelist /path/to/barcodes --run_index
+
+    Mandatory arguments:
+      --input                Path to samplesheet CSV file
+      --cb_whitelist         Path to cell barcode whitelist
+      
+    For genome indexing (required if --run_index is specified):
+      --genome_fasta         Path to genome FASTA file
+      --gtf_file             Path to GTF file for annotation
+      --read_length          Read length for calculating sjdbOverhang (default: 150)
+      --run_index            Flag to run genome indexing (default: false)
+      
+    If using pre-built index (when --run_index is not specified):
+      --ref_dir              Path to pre-built STAR reference directory
+      --gtf_file             Path to GTF file for annotation
+
+    Optional arguments:
+      --outdir               Output directory (default: ./results)
+      --help                 Show this message and exit
+    """.stripIndent()
+    )
+}
 
 // Define the workflow
 workflow {
+    seed = Channel.value(params.seed)
+
     // Show help message if needed
     if (params.help) {
         helpMessage()
@@ -26,8 +62,7 @@ workflow {
     }
 
     // Create channel from input samplesheet
-    ch_input = Channel
-        .fromPath(params.input)
+    ch_input = Channel.fromPath(params.input)
         .splitCsv(header: true)
         .map { row ->
             def sample_id = row.sample
@@ -66,37 +101,22 @@ workflow {
         ALIGNMENT(ch_input, Channel.value(file(params.ref_dir)), params.gtf_file, params.cb_whitelist)
     }
 
-    // Execute QC module
-    QC(ALIGNMENT.out.counts, Channel.value(params.seed))
+    // Execute QC modules
+    DROPLETS_TO_CELLS(
+        file("assets/droplets_to_cells.Rmd"),
+        ALIGNMENT.out.counts,
+        seed,
+    )
 
-}
+    DOUBLET_DETECTION(
+        file("assets/doublets.Rmd"),
+        DROPLETS_TO_CELLS.out.sce,
+        seed,
+    )
 
-def helpMessage() {
-    log.info(
-        """
-    =========================================
-    scRNA-seq Pipeline
-    =========================================
-    Usage:
-    nextflow run main.nf --input samplesheet.csv --genome_fasta /path/to/genome.fa --gtf_file /path/to/gtf --cb_whitelist /path/to/barcodes --run_index
-
-    Mandatory arguments:
-      --input                Path to samplesheet CSV file
-      --cb_whitelist         Path to cell barcode whitelist
-      
-    For genome indexing (required if --run_index is specified):
-      --genome_fasta         Path to genome FASTA file
-      --gtf_file             Path to GTF file for annotation
-      --read_length          Read length for calculating sjdbOverhang (default: 150)
-      --run_index            Flag to run genome indexing (default: false)
-      
-    If using pre-built index (when --run_index is not specified):
-      --ref_dir              Path to pre-built STAR reference directory
-      --gtf_file             Path to GTF file for annotation
-
-    Optional arguments:
-      --outdir               Output directory (default: ./results)
-      --help                 Show this message and exit
-    """.stripIndent()
+    CELL_QC(
+        file("assets/cell_qc.Rmd"),
+        DOUBLET_DETECTION.out.sce,
+        seed
     )
 }

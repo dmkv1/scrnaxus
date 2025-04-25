@@ -1,40 +1,35 @@
-workflow QC {
-    take:
-    counts
-    seed
-
-    main:
-    DROPLETS_TO_CELLS(counts, seed)
-
-    DOUBLET_DETECTION(
-        file("assets/doublets.Rmd"),
-        DROPLETS_TO_CELLS.out.sce,
-        seed)
-
-    CELL_QC(DOUBLET_DETECTION.out.sce, seed)
-
-    emit:
-    sce = CELL_QC.out.sce
-}
-
 process DROPLETS_TO_CELLS {
     tag "${sample_id}"
     publishDir "${params.outdir}/${sample_id}/droplets_to_cells/", mode: 'copy'
 
-    container "quay.io/biocontainers/bioconductor-dropletutils:1.26.0--r44h77050f0_1"
+    // container "quay.io/biocontainers/bioconductor-dropletutils:1.26.0--r44h77050f0_1"
 
     input:
+    path('droplets_to_cells.Rmd')
     tuple val(sample_id), val(expected_cells), val(patient_id), val(timepoint), val(compartment), path(counts_dir)
     val seed
 
     output:
+    tuple val(sample_id), path("${sample_id}_droplets_to_cells.nb.html"), emit: report
     tuple val(sample_id), path("${sample_id}_cells.sce"), emit: sce
-    tuple val(sample_id), path("${sample_id}_droplet_metrics.json"), emit: metrics
     tuple val(sample_id), path("${sample_id}_droplets.sce")
+    tuple val(sample_id), path("${sample_id}_droplet_metrics.json"), emit: metrics
 
     script:
     """
-    droplets_to_cells.R ${seed} "${sample_id}" "${expected_cells}" "${patient_id}" "${timepoint}" "${compartment}" "${counts_dir}"
+    Rscript -e "rmarkdown::render('droplets_to_cells.Rmd',
+                output_file = '${sample_id}_droplets_to_cells.nb.html',
+                params = list(
+                               sample_id = '${sample_id}',
+                               expected_cells = '${expected_cells}',
+                               patient_id = '${patient_id}',
+                               timepoint  = '${timepoint}',
+                               compartment = '${compartment}',
+                               counts_dir = '${counts_dir}',
+                               FDR_thresh = '${params.qc.FDR_thresh}',
+                               path_sce_output = '${sample_id}_cells.sce',
+                               seed = ${seed}
+                             ))"
     """
 }
 
@@ -56,12 +51,12 @@ process DOUBLET_DETECTION {
 
     script:
     """
-    Rscript -e "rmarkdown::render('doublets.Rmd', \\
-                output_file = '${sample_id}_doublets.nb.html', \\
+    Rscript -e "rmarkdown::render('doublets.Rmd',
+                output_file = '${sample_id}_doublets.nb.html',
                 params = list(
-                               sample_id = '${sample_id}', \\
-                               path_sce_input = '${sce}', \\
-                               path_sce_output = '${sample_id}_singlets.sce', \\
+                               sample_id = '${sample_id}',
+                               path_sce_input = '${sce}',
+                               path_sce_output = '${sample_id}_singlets.sce',
                                seed = ${seed}
                              ))"
     """
@@ -74,14 +69,26 @@ process CELL_QC {
     // container "docker://satijalab/seurat:5.0.0"
 
     input:
+    path('cell_qc.Rmd')
     tuple val(sample_id), path(sce)
     val seed
 
     output:
-    tuple val(sample_id), path("${sample_id}_clean.sce"), emit: sce
+    tuple val(sample_id), path("${sample_id}_cell_QC.nb.html"), emit: report
+    // tuple val(sample_id), path("${sample_id}_clean.sce"), emit: sce
 
     script:
     """
-    cell_QC.R ${seed} "${sample_id}" "${sce}"
+    Rscript -e "rmarkdown::render('cell_qc.Rmd',
+                output_file = '${sample_id}_cell_QC.nb.html',
+                params = list(
+                    sample_id = '${sample_id}',
+                    path_sce_input = '${sce}',
+                    path_sce_output = '${sample_id}_cells.sce',
+                    nUMI_thresh = '${params.qc.nUMI_thresh}',
+                    nGenes_thresh = '${params.qc.nGenes_thresh}',
+                    mitochondrial_thresh = '${params.qc.mitochondrial_thresh}',
+                    seed = ${seed}
+                    ))"
     """
 }

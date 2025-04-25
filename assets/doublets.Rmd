@@ -1,4 +1,5 @@
 ---
+title: "`r params$sample_id` - doublet detection"
 output:
   html_notebook:
     code_folding: hide
@@ -9,11 +10,10 @@ params:
   seed: 42
 ---
 
-# Doublet labeling
-
 ```{r setup}
 sample_id <- params$sample_id
 path_sce_input <- params$path_sce_input
+path_sce_output <- params$path_sce_output
 seed <- params$seed
 set.seed(seed)
 
@@ -24,16 +24,14 @@ suppressPackageStartupMessages({
 })
 ```
 
-## Processing sample `r sample_id`.
-
-### Read the sce
+# Read the sce
 
 ```{r load_sce}
 sce <- readRDS(path_sce_input)
 sce
 ```
 
-### Run scDblFinder
+# Run scDblFinder
 
 ```{r run_scDblFinder}
 sce <- scDblFinder(
@@ -42,17 +40,17 @@ sce <- scDblFinder(
 )
 ```
 
-### Resulting sce
+# Resulting sce
 
 ```{r sce_result}
 sce
 ```
 
 ```{r write_sce}
-saveRDS(sce, paste0(sample_id, "_singlets.sce"))
+saveRDS(sce, path_sce_output)
 ```
 
-### Metrics
+# Metrics
 
 ```{r doublet_counts}
 n_singlets <- sum(sce$scDblFinder.class == "singlet")
@@ -72,7 +70,7 @@ metrics <- list(
 writeLines(jsonlite::toJSON(metrics, pretty=TRUE), paste0(sample_id, "_doublet_metrics.json"))
 ```
 
-## Session info
+# Session info
 
 ```{r sessionInfo}
 print(sessionInfo())
