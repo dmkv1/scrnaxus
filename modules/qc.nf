@@ -45,9 +45,9 @@ process DOUBLET_DETECTION {
     val seed
 
     output:
+    tuple val(sample_id), path("${sample_id}_doublets.nb.html"), emit: report
     tuple val(sample_id), path("${sample_id}_singlets.sce"), emit: sce
     tuple val(sample_id), path("${sample_id}_doublet_metrics.json"), emit: metrics
-    tuple val(sample_id), path("${sample_id}_doublets.nb.html"), emit: report
 
     script:
     """
@@ -76,6 +76,7 @@ process CELL_QC {
     output:
     tuple val(sample_id), path("${sample_id}_cell_QC.nb.html"), emit: report
     tuple val(sample_id), path("${sample_id}_cells.sce"), emit: sce
+    tuple val(sample_id), path("${sample_id}_cell_QC_metrics.json"), emit: metrics
 
     script:
     """

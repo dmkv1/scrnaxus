@@ -160,12 +160,15 @@ seurat <- FindClusters(seurat,
                        resolution = 0.5)
 ```
 
-```{r UMAP, fig.width=11, fig.height=5}
-sce <- as.SingleCellExperiment(seurat)
+```{r transfer_results_to_sce}
+reducedDims(sce)[["UMAP"]] <- Embeddings(seurat, reduction = "umap")
+sce[["clusters"]] <- seurat$seurat_clusters
+```
 
+```{r UMAP_plot, fig.width=11, fig.height=5}
 plotUMAP(sce,
-         color_by = "seurat_clusters",
-         text_by = "seurat_clusters") +
+         color_by = "clusters",
+         text_by = "clusters") +
   plotUMAP(sce,
          color_by = "discard")
 ```
@@ -173,7 +176,7 @@ plotUMAP(sce,
 # Discard problematic cells
 
 ```{r discard_rates}
-cluster_discard_stats <- table(colData(sce)[["seurat_clusters"]], colData(sce)[["discard"]])
+cluster_discard_stats <- table(colData(sce)[["clusters"]], colData(sce)[["discard"]])
 
 cluster_discard_proportions <- prop.table(cluster_discard_stats, margin = 1)[, "TRUE"]
 
@@ -217,15 +220,26 @@ if (length(problematic_clusters) > 0) {
       cluster_discard_thresh * 100,
       "%\n")
 }
-
-sce_clean <- sce[, !colData(sce)$discard]
-cat("Removed", sum(colData(sce)$discard), "out of", ncol(sce), 
-    "cells (", round(sum(colData(sce)$discard) / ncol(sce) * 100, 2), "%) marked for discard\n")
 ```
+
+```{r generate_and_store_metrics}
+metrics <- list(
+  sample_id = sample_id,
+  total_cells = ncol(sce),
+  qc_cells = sum(!colData(sce)[["discard"]]),
+  discard_cells = sum(colData(sce)[["discard"]])
+)
+metrics[["discard_ratio"]] <- round(metrics$discard_cells / metrics$total_cells, 3)
+
+writeLines(jsonlite::toJSON(metrics, pretty=TRUE), paste0(sample_id, "_cell_QC_metrics.json"))
+```
+
+Sample `r metrics$sample_id` has `r metrics$qc_cells` cells which passed QC and `r metrics$discard_cells` cells marked for removal (`r metrics$discard_ratio * 100` %).
 
 # Write resulting sce
 
 ```{r print_sce}
+sce_clean <- sce[, !colData(sce)$discard]
 sce_clean
 ```
 

@@ -10,6 +10,8 @@ include { ALIGNMENT } from './modules/alignment'
 include { DROPLETS_TO_CELLS } from './modules/qc'
 include { DOUBLET_DETECTION } from './modules/qc'
 include { CELL_QC } from './modules/qc'
+// Cell annotations
+include { SEURAT_CLUSTERING } from './modules/analysis'
 
 def helpMessage() {
     log.info(
@@ -117,6 +119,13 @@ workflow {
     CELL_QC(
         file("assets/cell_qc.Rmd"),
         DOUBLET_DETECTION.out.sce,
+        seed
+    )
+
+    // Annotate cells
+    SEURAT_CLUSTERING(
+        file("assets/cell_types.Rmd"),
+        CELL_QC.out.sce,
         seed
     )
 }
