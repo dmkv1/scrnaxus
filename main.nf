@@ -105,26 +105,26 @@ workflow {
 
     // Execute QC modules
     DROPLETS_TO_CELLS(
-        file("assets/droplets_to_cells.Rmd"),
+        file("templates/droplets_to_cells.Rmd"),
         ALIGNMENT.out.counts,
         seed,
     )
 
     DOUBLET_DETECTION(
-        file("assets/doublets.Rmd"),
+        file("templates/doublets.Rmd"),
         DROPLETS_TO_CELLS.out.sce,
         seed,
     )
 
     CELL_QC(
-        file("assets/cell_qc.Rmd"),
+        file("templates/cell_qc.Rmd"),
         DOUBLET_DETECTION.out.sce,
         seed
     )
 
     // Annotate cells
     SEURAT_CLUSTERING(
-        file("assets/cell_types.Rmd"),
+        file("templates/cell_types.Rmd"),
         CELL_QC.out.sce,
         seed
     )
