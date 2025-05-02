@@ -1,0 +1,171 @@
+---
+title: "`r params$sample_id` - cell type annotation"
+output:
+  html_notebook:
+    code_folding: hide
+params:
+  sample_id: "P009_DG"
+  path_sce_input: "/media/data/NGS/Projects/MCL-scrnaseq-phanthomMenace/scrnaxus/results/P009_DG/annotations/P009_DG_clustered.sce"
+  path_sce_output: "test_sce.rds"
+  seed: 42
+---
+
+```{r setup}
+sample_id <- params$sample_id
+path_sce_input <- params$path_sce_input
+path_sce_output <- params$path_sce_output
+
+seed <- params$seed
+set.seed(seed)
+
+# Load the libraries
+suppressPackageStartupMessages({
+  library(SingleCellExperiment)
+  library(scater)
+  library(SingleR)
+  library(celldex)
+  library(dplyr)
+  library(patchwork)
+  library(ggthemes)
+})
+```
+
+# Read the sce
+
+```{r load_sce}
+sce <- readRDS(path_sce_input)
+sce
+```
+
+```{r feature_plots, fig.width=8.5, fig.height=8}
+features <- c(
+  "B cells" = "MS4A1",
+  "T cells" = "CD3E",
+  "NK cells" = "KLRD1",
+  "Normal B cells" = "HLA-DPB1",
+  "Memory T cells" = "IL7R",
+  "CD8+ T cells" = "CD8A",
+  "Monocytes" = "LYZ",
+  "Macrophages" = "MS4A7",
+  "MCL" = "CCND1"
+)
+
+featurePlots <- list()
+for (marker in names(features)) {
+  featurePlots[[features[[marker]]]] <- plotUMAP(sce, color_by = features[[marker]]) +
+    theme_void() +
+    guides(color = guide_colorbar(title = "expr")) +
+    theme(
+      panel.border = element_rect(
+        color = "black",
+        fill = NA,
+        linewidth = 0.5
+      ),
+      plot.margin = margin(2, 2, 2, 2)
+    ) +
+    labs(title = paste0(marker, ": ", features[[marker]]))
+}
+featurePlots <- wrap_plots(featurePlots)
+featurePlots
+```
+
+```{r get_reference}
+ref <- celldex::MonacoImmuneData()
+
+cell_types <- ref$label.main %>% 
+  unique()
+
+cell_types
+```
+
+```{r predict_cell_types}
+predicted.types.main <- SingleR(
+  test = sce,
+  ref = ref,
+  labels = ref$label.main,
+  de.method = "classic"
+)
+
+# assign cell types to sce
+sce$cell_type_main <- predicted.types.main$labels
+```
+
+```{r UMAP, fig.height=4, fig.width=9, message=FALSE, warning=FALSE}
+plotUMAP(sce,
+         color_by = "clusters",
+         text_by = "clusters") +
+  
+  plotUMAP(sce,
+         color_by = "cell_type_main")
+```
+
+# Cell type counts
+
+```{r}
+cell_type_counts <- colData(sce) %>% 
+  as.data.frame() %>% 
+  group_by(cell_type_main) %>% 
+  reframe(N = n()) %>% 
+  arrange(desc(N))
+cell_type_counts
+```
+
+```{r}
+par(mar = c(0, 7, 0, 2)) 
+barplot(rep(1, length(cell_type_cols)), 
+        col = cell_type_cols,
+        names.arg = names(cell_type_cols),
+        las = 2,
+        horiz = TRUE)
+```
+
+```{r}
+detected_types <- cell_type_counts$cell_type_main
+
+get_colors <- tableau_color_pal(
+  palette = "Tableau 10",
+  type = c("regular"),
+  direction = 1
+)
+cell_type_cols <- get_colors(length(detected_types))
+names(cell_type_cols) <- detected_types
+```
+
+# Cell types by cluster
+
+```{r clusters_cell_types}
+clusters_cell_types <- colData(sce) %>% 
+  as.data.frame() %>% 
+  group_by(clusters, cell_type_main) %>% 
+  reframe(N = n())
+clusters_cell_types
+```
+
+```{r clusters_cell_types_barplot, fig.width=10, fig.height=6}
+ggplot(clusters_cell_types,
+       aes(y = N, x = clusters, fill = cell_type_main)) +
+  geom_col(position = "stack", color = "gray30") +
+  scale_fill_manual(values = cell_type_cols) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_bw()
+```
+
+# Write resulting sce
+
+```{r print_sce}
+sce
+```
+
+```{r write_sce}
+saveRDS(sce, path_sce_output)
+```
+
+# Session info
+
+```{r sessionInfo}
+print(sessionInfo())
+```
+
+```{r gc}
+gc()
+```
