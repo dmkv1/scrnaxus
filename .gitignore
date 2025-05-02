@@ -27,5 +27,3 @@ docker compose/rstudio-server-scrnaseq/STAR
 
 *.png
 *.pdf
-
-run.sh
